@@ -144,7 +144,8 @@ def encoder_args(codec, cq, preset):
 
 def probe(ffprobe, video):
     r = subprocess.run([ffprobe, "-v", "error", "-select_streams", "v:0", "-count_packets", "-show_entries",
-                        "stream=width,height,r_frame_rate,nb_read_packets:format=duration",
+                        "stream=width,height,r_frame_rate,nb_read_packets,pix_fmt,color_space,color_range,"
+                        "color_transfer,color_primaries:format=duration",
                         "-of", "json", str(video)], capture_output=True, text=True,
                        creationflags=subprocess.CREATE_NO_WINDOW)
     if r.returncode:
@@ -153,7 +154,16 @@ def probe(ffprobe, video):
     s = j["streams"][0]
     num, den = map(int, s["r_frame_rate"].split("/"))
     return {"w": s["width"], "h": s["height"], "fps": num / den, "frames": int(s["nb_read_packets"]),
-            "duration": float(j["format"]["duration"])}
+            "duration": float(j["format"]["duration"]), "pix_fmt": s.get("pix_fmt", "yuv420p"),
+            # без тегов считаем как OBS по умолчанию: BT.709, ограниченный диапазон
+            "space": s.get("color_space", "bt709") if s.get("color_space") in COLOR_MATRICES else "bt709",
+            "range": "pc" if s.get("color_range") == "pc" else "tv",
+            "trc": s.get("color_transfer", "bt709"), "primaries": s.get("color_primaries", "bt709")}
+
+
+# что умеет scale=out_color_matrix (ключ — как пишет ffprobe)
+COLOR_MATRICES = {"bt709": "bt709", "smpte170m": "smpte170m", "bt470bg": "bt601", "fcc": "fcc",
+                  "smpte240m": "smpte240m", "bt2020nc": "bt2020"}
 
 
 def make_sprites(work, types, clicked, size, rc):
@@ -306,6 +316,11 @@ def render(video, log_path, cfg, progress=None, clip=None):
         chain = ["[0:v]sendcmd=f=cmds.txt[v0]"]
         for i, (name, *_) in enumerate(slots, 1):
             chain.append(f"[v{i - 1}][{i}:v]overlay@{name}=x={HIDE}:y=0:format=auto:eof_action=repeat[v{i}]")
+        # overlay может уйти в RGB; собираем обратно в цвета исходника, иначе плееры показывают другой цветокор
+        n = len(slots)
+        chain[-1] = chain[-1].removesuffix(f"[v{n}]") + (
+            f",scale=out_color_matrix={COLOR_MATRICES[info['space']]}:out_range={info['range']}"
+            f",format={info['pix_fmt']}[v{n}]")
         (work / "graph.txt").write_text(";".join(chain), encoding="ascii")
         cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-nostats", "-progress", "pipe:1", "-hwaccel", "auto"]
         if clip:
@@ -314,7 +329,9 @@ def render(video, log_path, cfg, progress=None, clip=None):
         for _, png, *_ in slots:
             cmd += ["-i", png]
         cmd += ["-/filter_complex", "graph.txt", "-map", f"[v{len(slots)}]", "-map", "0:a?", "-c:a", "copy",
-                "-c:v", codec, *encoder_args(codec, rc["cq"], rc["preset"]), "-fps_mode", "passthrough"]
+                "-c:v", codec, *encoder_args(codec, rc["cq"], rc["preset"]), "-fps_mode", "passthrough",
+                "-colorspace", info["space"], "-color_range", info["range"],
+                "-color_trc", info["trc"], "-color_primaries", info["primaries"]]
         if codec.startswith("hevc"):
             cmd += ["-tag:v", "hvc1"]
         cmd.append(str(out))
