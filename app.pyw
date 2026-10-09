@@ -566,9 +566,6 @@ class Onboarding(tk.Frame):
         app.lbl(brand, "Smooth Cursor", "brand").pack(anchor="w")
         app.lbl(brand, t("первая настройка"), "brand", MUTE).pack(anchor="w")
         app.lang_switch(top).pack(side="right", anchor="n", padx=(30, 0))
-        skip = app.lbl(top, t("ПРОПУСТИТЬ"), "nav", INK, cursor="hand2")
-        skip.pack(side="right", anchor="n")
-        skip.bind("<Button-1>", lambda e: self.finish())
 
         bot = tk.Frame(page, bg=BG)
         bot.pack(side="bottom", fill="x")
@@ -601,6 +598,7 @@ class Onboarding(tk.Frame):
             on = i <= self.step
             self.dots.create_rectangle(i * 14, 0, i * 14 + 9, 9, fill=INK if on else BG, outline=INK if on else LINE)
         self.back_btn.set_enabled(self.step > 0)
+        self.update_next()
         self.next_btn.set_text(t("Начать работу") if self.step == self.STEPS - 1 else t("Далее"))
         self.draw_art()
         title, builder = ((t("Привет.\nНастроим?"), self.s_hello), (t("Подключим\nOBS."), self.s_obs),
@@ -643,6 +641,12 @@ class Onboarding(tk.Frame):
         lab = self.app.lbl(parent, "", "body", INK, justify="left", wraplength=600, anchor="w")
         lab.pack(anchor="w", pady=(10, 0))
         return lab
+
+    def update_next(self):
+        """Дальше — только когда шаг пройден: OBS подключён и ffmpeg есть (сцену можно не трогать)."""
+        a = self.app
+        if self.winfo_exists():
+            self.next_btn.set_enabled({1: bool(a.recorder), 3: a.encoder is not None}.get(self.step, True))
 
     def next(self):
         if self.step == self.STEPS - 1:
@@ -707,6 +711,7 @@ class Onboarding(tk.Frame):
             self.obs_status.config(text="■ " + t("Подключено: OBS {}").format(self.app.spec.get("version", "")),
                                    fg=INK)
             self.obs_link.pack_forget()
+            self.update_next()
         else:
             self.obs_status.config(text=t("Не получилось: ") + getattr(self.app, "last_error", ""), fg=RED)
             self.obs_link.pack(side="left", padx=(10, 0))
@@ -794,6 +799,7 @@ class Onboarding(tk.Frame):
         if self.step != 3 or not hasattr(self, "enc_row") or not self.enc_row.winfo_exists():
             return
         a = self.app
+        self.update_next()
         for w in self.enc_row.winfo_children():
             w.destroy()
         if a.ffmpeg_installing:

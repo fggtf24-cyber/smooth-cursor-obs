@@ -58,7 +58,7 @@ EN = {
 
 EN.update({
     # --- онбординг ---
-    "ПРОПУСТИТЬ": "SKIP", "Далее": "Next", "Назад": "Back", "Начать работу": "Get started",
+    "Далее": "Next", "Назад": "Back", "Начать работу": "Get started",
     "первая настройка": "first-time setup", "ЯЗЫК": "LANGUAGE",
     "Привет.\nНастроим?": "Hello.\nLet's set up.", "Подключим\nOBS.": "Connect\nOBS.",
     "Что\nзаписываем.": "What we\nrecord.", "Куда и чем\nсохранять.": "Where and\nhow to save.", "Готово.": "Done.",
