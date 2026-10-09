@@ -44,7 +44,10 @@ def check_smoothing():
         assert tr["visible"][f(1400)] and not tr["visible"][f(1600)], (method, "видимость")
         assert tr["type"][f(650)] == 1 and tr["type"][f(400)] == 0, (method, "тип курсора")
         assert abs(tr["click_age"][f(833)] - 33.3) < 1 and tr["click_age"][f(400)] < 0, (method, "время клика")
-        lag = tr["t"][np.argmax(tr["x"] >= np.interp(250, tr["t"], tr["raw_x"]))] - 250
+        tg, sx = tr["path"][:2]  # с шагом 1 мс: когда сглаженный курсор проходит точку, где рука была в 250 мс
+        raw = np.asarray(log["samples"], float)
+        lag = tg[np.argmax(sx >= np.interp(250, raw[:, 0], raw[:, 1]))] - 250
+        assert abs(lag) <= 10, (method, "курсор отстаёт от руки — подсветка на экране убежит вперёд", lag)
         # перетаскивание 1 px/мс, отпущено на ходу: после отпускания курсор не откатывается назад
         t = np.arange(0, 1500, 1000 / 240)
         drag = {"display": {"width": 4000, "height": 1000}, "samples": [[a, 100 + min(max(a - 200, 0), 500), 500, 0, 1]
@@ -55,7 +58,7 @@ def check_smoothing():
             settings.apply_preset(cfg, name)
             x = smoothing.frame_track(drag, 1000, 1500, {**cfg["smoothing"], "method": method}, 0)["x"]
             assert x[700:].min() > 600 - 0.5, (method, name, "откат после перетаскивания", 600 - x[700:].min())
-        print(f"{method}: ок; на середине рывка отстаёт на ~{lag:.0f} мс")
+        print(f"{method}: ок; на середине рывка расхождение с рукой {lag:+.0f} мс")
 
 
 def check_click_animation():
@@ -150,6 +153,7 @@ def check_accurate_blur():
                       [2600.0, "L", 1, 1800, 300], [2700.0, "L", 0, 1800, 300]]}
     cfg = settings.load()
     cfg["sync"]["offset_ms"] = 0
+    cfg["smoothing"] = copy.deepcopy(SM)  # не зависеть от выбранного пресета
     cfg["render"].update(codec="libx264", click_animation=True, motion_blur=True, shutter=30, debug_raw=False,
                          export_keyframes=False, cursor_scale=1.0)
     ff = render.tool(cfg["render"]["ffmpeg"], "ffmpeg")
@@ -175,11 +179,18 @@ def check_accurate_blur():
 
             G, A = luma(False), luma(True)
             assert len(A) == len(G) == 4 * FPS
-            bad = [n for n in list(range(47)) + list(range(80, 120)) if (A[n] != G[n]).any()]
+            # курсор стоит — за всю выдержку кадра сглаженный путь не сдвинулся (сглаживание без задержки начинает
+            # движение чуть раньше руки, поэтому берём по траектории, а не по времени рывка)
+            tr = smoothing.frame_track(log, FPS, 4 * FPS, cfg["smoothing"], 0)
+            tg, sx = tr["path"][:2]
+            still = [n for n in range(4 * FPS) if np.ptp(np.interp(
+                np.linspace(tr["t"][n] - 1000 / 30 - 2, tr["t"][n], 40), tg, sx)) < 0.01]
+            assert {10, 15, 30, 85} <= set(still), still  # клик, смена курсора, второй клик
+            bad = [n for n in still if (A[n] != G[n]).any()]
             assert not bad and (G[10] != G[2]).any(), ("в покое точный ≠ обычному", bad)
             for n in (56, 58, 60):
-                row = np.nonzero(A[n].max(1) > 4)[0].min() + 10
-                on = np.nonzero(A[n][row] > 4)[0]
+                row = np.argmax((A[n] > 0).sum(1))  # самая длинная строка следа (фон чёрный, без потерь)
+                on = np.nonzero(A[n][row] > 0)[0]
                 assert (np.diff(on) == 1).all() and on[-1] - on[0] > 80, (n, "смаз с разрывами или короткий")
                 assert abs(A[n].sum() / A[40].sum() - 1) < 0.03, (n, "смаз несёт не столько света, сколько курсор")
             P = luma(True, clip=(1.73, 0.5))

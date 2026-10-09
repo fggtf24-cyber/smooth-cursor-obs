@@ -1480,8 +1480,8 @@ class App:
         self.method_hint.grid(row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
         self.spring_box, _ = self.section(l, "Пружина")
         self.slider(self.spring_box, 0, "Жёсткость", "smoothing.stiffness", 50, 1500, 10,
-                    live_hint=lambda v: t("задержка ≈ {} мс. Меньше — плавнее и медленнее, больше — быстрее "
-                                          "догоняет руку.").format(round(2000 / v ** 0.5)))
+                    live_hint=lambda v: t("сглаживание ≈ {} мс: меньше — плавнее, больше — точнее повторяет руку. "
+                                          "Задержки нет.").format(round(3380 / v ** 0.5)))  # разгон 10–90%
         self.slider(self.spring_box, 1, "Демпфирование", "smoothing.damping_ratio", 0.3, 1.5, 0.05,
                     "1 — без перелёта. Меньше — курсор слегка проскакивает цель, больше — вязко.")
         self.euro_box, _ = self.section(l, "One Euro")

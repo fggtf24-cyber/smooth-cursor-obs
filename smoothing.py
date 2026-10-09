@@ -86,13 +86,24 @@ def frame_track(log, fps, n_frames, sm, offset_ms, ghost_ms=()):
         held |= (tg >= tc) & (tg <= tc + ln)
     dzx, dzy = deadzone(x, y, sm["deadzone_px"])
     tx, ty = np.interp(tg, t, dzx), np.interp(tg, t, dzy)
-    # пока кнопка зажата, фильтр стоит на реальной точке: иначе после отпускания курсор откатится к отставшему фильтру
+    # между видимым сэмплом и следующим невидимым (курсор ушёл с экрана) не смешиваем: иначе последняя видимая
+    # точка тянется за край, а обратный проход фильтра разнёс бы это на сотни мс назад
+    edge = vis[j] != vis[np.minimum(j + 1, len(t) - 1)]
+    rx[edge], ry[edge], tx[edge], ty[edge] = x[j[edge]], y[j[edge]], dzx[j[edge]], dzy[j[edge]]
+    # Сглаживаем без запаздывания: тот же фильтр вперёд и назад по времени (рендер знает будущее), запаздывания
+    # взаимно гасятся. Иначе курсор на видео отстаёт от руки, а подсветка кнопок и пунктов списка — нет.
+    # Пока кнопка зажата, фильтр стоит на реальной точке: иначе после отпускания курсор откатится к отставшему.
+    ends = gvis & ~np.r_[gvis[1:], False]  # курсор пропадает — для обратного прохода это начало
+    dt = STEP_MS / 1000
     if sm["method"] == "one_euro":
         e = sm["one_euro"]
-        sx, sy = one_euro(tx, ty, reset | held, e["min_cutoff"], e["beta"], e["d_cutoff"], STEP_MS / 1000)
+        fx, fy = one_euro(tx, ty, reset | held, e["min_cutoff"], e["beta"], e["d_cutoff"], dt)
+        bx, by = one_euro(fx[::-1], fy[::-1], (ends | held)[::-1], e["min_cutoff"], e["beta"], e["d_cutoff"], dt)
     else:
-        k = sm["stiffness"]
-        sx, sy = spring(tx, ty, reset | held, k, 2 * sm["damping_ratio"] * math.sqrt(k), STEP_MS / 1000)
+        k = 2 * sm["stiffness"]  # два прохода по 2× жёсткости плавны, как один прежний (тот же разгон за ступенькой)
+        fx, fy = spring(tx, ty, reset | held, k, 2 * sm["damping_ratio"] * math.sqrt(k), dt)
+        bx, by = spring(fx[::-1], fy[::-1], (ends | held)[::-1], k, 2 * math.sqrt(k), dt)  # назад — без перелёта
+    sx, sy = bx[::-1].copy(), by[::-1].copy()
     pull = click_weight(tg, [c[0] for c in log["clicks"]], sm["click_pull_ms"])
     pull[held] = 1.0  # пока кнопка зажата (перетаскивание) — точно на реальной позиции, иначе отстаём от ползунка
     sx += (rx - sx) * pull

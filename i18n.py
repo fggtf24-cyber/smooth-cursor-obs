@@ -142,8 +142,8 @@ EN.update({
         "Could not change the OBS recordings folder (OBS 30 or newer is needed): %s",
     # --- движение ---
     "Метод сглаживания": "Smoothing method", "Пружина": "Spring", "Жёсткость": "Stiffness", "Демпфирование": "Damping",
-    "задержка ≈ {} мс. Меньше — плавнее и медленнее, больше — быстрее догоняет руку.":
-        "delay ≈ {} ms. Lower is smoother and slower, higher catches up with your hand faster.",
+    "сглаживание ≈ {} мс: меньше — плавнее, больше — точнее повторяет руку. Задержки нет.":
+        "smoothing ≈ {} ms: lower is smoother, higher follows your hand more closely. No delay.",
     "1 — без перелёта. Меньше — курсор слегка проскакивает цель, больше — вязко.":
         "1 means no overshoot. Lower makes the cursor overshoot slightly, higher feels sluggish.",
     "Мягко и «дорого», как в Screen Studio.": "Soft and “premium”, like Screen Studio.",
