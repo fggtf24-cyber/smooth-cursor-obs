@@ -1,0 +1,7 @@
+__pycache__/
+build/
+release/
+*.spec
+*.exe
+*.mp4
+*.cursor.json

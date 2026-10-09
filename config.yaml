@@ -1,0 +1,45 @@
+# Настройки Smooth Cursor. Удобнее менять в программе (app.pyw), описание — в README.
+obs:
+  host: localhost
+  port: 4455
+  password: ''
+  disable_capture_cursor: true
+hotkey: F9
+display: auto
+logger:
+  hz: 240
+sync:
+  offset_ms:
+    30: -50
+    60: -15
+    default: -30
+smoothing:
+  method: spring
+  stiffness: 400
+  damping_ratio: 1.0
+  click_pull_ms: 150
+  deadzone_px: 3
+  one_euro:
+    min_cutoff: 1.0
+    beta: 0.005
+    d_cutoff: 1.0
+render:
+  ffmpeg: C:/ffmpeg/bin/ffmpeg.exe
+  codec: hevc_nvenc
+  cq: 18
+  preset: p5
+  cursor_scale: 1.0
+  click_animation: true
+  click_scale: 0.82
+  click_tilt_deg: 15
+  click_ms: 320
+  motion_blur: true
+  blur_length: 0.5
+  blur_opacity: 1.0
+  debug_raw: false
+  export_keyframes: false
+ui:
+  folder: ''
+  auto_render: true
+  preview_start: 0.0
+  preview_len: 5.0
