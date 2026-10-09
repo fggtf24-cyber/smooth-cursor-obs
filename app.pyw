@@ -1065,9 +1065,6 @@ class App:
         top_now.pack(fill="x", pady=(0, 6))
         self.lbl(top_now, t("СЕЙЧАС В OBS"), "caps", INK).pack(side="left")
         Btn(top_now, t("Проверить"), self.refresh_obs, small=True).pack(side="left", padx=(14, 0))
-        view = Btn(top_now, t("Окно с курсором"), self.open_view, small=True)
-        view.pack(side="left", padx=(6, 0))
-        self.hint_on((view,), "Окно с курсором", "экран, который пишется, но с курсором — для себя, в запись не идёт.")
         self.now = [self.lbl(now, "", "small", INK2, anchor="w") for _ in range(3)]
         for w in self.now:
             w.pack(anchor="w")
@@ -1702,21 +1699,6 @@ class App:
             log.info(t("OBS теперь сохраняет записи в %s"), folder)
         except Exception as e:
             log.error(t("Не удалось сменить папку записей в OBS (нужен OBS 30 или новее): %s"), e)
-
-    def open_view(self):
-        """Оконный проектор записываемого экрана с курсором (сцена «Smooth Cursor · Просмотр» в OBS)."""
-        if not self.recorder:
-            return self.connect()
-
-        def work():
-            try:
-                d = self.recorder.pick_display()
-                self.recorder.obs.open_view(d)
-                log.info(t("Окно с курсором: %s — в запись не идёт"), d["device"].split(chr(92))[-1])
-            except Exception as e:
-                log.error("%s", e)
-
-        self.worker.submit(work)
 
     def check_display(self):
         if self.recorder:
