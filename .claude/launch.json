@@ -1,6 +1,0 @@
-{
-  "version": "0.0.1",
-  "configurations": [
-    { "name": "site", "runtimeExecutable": "php", "runtimeArgs": ["-d", "date.timezone=UTC", "-S", "localhost:8766", "-t", "site"], "port": 8766 }
-  ]
-}

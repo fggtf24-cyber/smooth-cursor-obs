@@ -5,3 +5,5 @@ release/
 *.exe
 *.mp4
 *.cursor.json
+site/
+.claude/
