@@ -1410,31 +1410,46 @@ class App:
 
     PRESET_NAMES = {"standard": "Стандарт", "light": "Лёгкий", "cinema": "Кино", "clean": "Без эффектов"}
 
+    def accurate_blur(self):
+        rc = self.cfg["render"]
+        return rc["motion_blur"] and rc["blur_accurate"]
+
     def mark_preset(self):
         if hasattr(self, "preset_btn") and self.preset_btn.winfo_exists():
             cur = settings.preset_of(self.cfg)
-            self.preset_btn.set_text(f"{t('Пресет')}: {t(self.PRESET_NAMES[cur]) if cur else t('свой')}  ▾")
+            acc = " · " + t("точный блюр") if self.accurate_blur() else ""
+            self.preset_btn.set_text(f"{t('Пресет')}: {t(self.PRESET_NAMES[cur]) if cur else t('свой')}{acc}  ▾")
 
     def preset_menu(self):
-        """Выпадающий список пресетов под кнопкой — в стиле программы, закрывается кликом мимо или Esc."""
+        """Выпадающий список пресетов под кнопкой — в стиле программы, закрывается кликом мимо или Esc.
+        Ниже пресетов — точный motion blur: он с любым пресетом, поэтому отдельным флажком."""
         b, cur = self.preset_btn, settings.preset_of(self.cfg)
         m = tk.Toplevel(self.root, bg=INK)
         m.overrideredirect(True)
         m.geometry(f"+{b.winfo_rootx()}+{b.winfo_rooty() + b.winfo_height() + 4}")
         box = tk.Frame(m, bg=BG)
         box.pack(padx=1, pady=1)
-        for name, label in self.PRESET_NAMES.items():
+
+        def item(marked, label, action):
             row = tk.Frame(box, bg=BG, cursor="hand2")
             row.pack(fill="x")
-            mark = self.lbl(row, "■" if name == cur else "", "small", INK, width=2)
+            mark = self.lbl(row, "■" if marked else "", "small", INK, width=2)
             mark.pack(side="left", padx=(10, 0), pady=7)
-            lab = self.lbl(row, t(label), "body", INK, anchor="w", width=16)
+            lab = self.lbl(row, label, "body", INK, anchor="w", width=20)
             lab.pack(side="left", padx=(2, 14))
             for w in (row, mark, lab):
                 w.bind("<Enter>", lambda e, r=row: [x.config(bg=HOVER) for x in (r, *r.winfo_children())])
                 w.bind("<Leave>", lambda e, r=row: [x.config(bg=BG) for x in (r, *r.winfo_children())])
-                w.bind("<Button-1>", lambda e, n=name: (m.destroy(), self.pick_preset(n)))
+                w.bind("<Button-1>", lambda e: (m.destroy(), action()))
+
+        for name, label in self.PRESET_NAMES.items():
+            item(name == cur, t(label), lambda n=name: self.pick_preset(n))
         self.lbl(box, t("Меняет сглаживание и эффекты.\nДальше можно подстроить ползунками."), "small", MUTE,
+                 justify="left").pack(anchor="w", padx=12, pady=(4, 10))
+        tk.Frame(box, height=1, bg=RULE).pack(fill="x", padx=10)
+        item(self.accurate_blur(), t("Точный motion blur"), self.toggle_accurate)
+        self.lbl(box, t("Как у камеры: курсор смазан по всей выдержке,\nа не нарисован копиями. Цена: на быстрых "
+                        "рывках\nрендер до 1,6× дольше, шлейф бледнее копий."), "small", MUTE,
                  justify="left").pack(anchor="w", padx=12, pady=(4, 10))
         m.bind("<Escape>", lambda e: m.destroy())
         m.bind("<FocusOut>", lambda e: m.destroy())
@@ -1444,6 +1459,14 @@ class App:
         settings.apply_preset(self.cfg, name)
         settings.save(self.cfg)
         self.rebuild()  # ползунки показывают новые значения
+
+    def toggle_accurate(self):
+        rc, on = self.cfg["render"], not self.accurate_blur()
+        rc["blur_accurate"] = on
+        if on:
+            rc["motion_blur"] = True  # точный блюр — тоже шлейф
+        settings.save(self.cfg)
+        self.rebuild()  # флажок во вкладке «Эффекты» и подпись пресета
 
     def tab_motion(self, p):
         l, r = self.columns(p)
@@ -1489,16 +1512,28 @@ class App:
         self.slider(g, 2, "Наклон", "render.click_tilt_deg", -45, 45, 1,
                     "Градусы против часовой вокруг кончика стрелки; минус — по часовой.", fmt=lambda v: f"{v}°")
         self.slider(g, 3, "Длительность", "render.click_ms", 100, 1000, 10,
-                    "мс: первая четверть — курсор вжимается, остальное время плавно возвращается. Пока кнопка зажата, наклон держится.")
+                    "мс: первая четверть — нажатие, затем плавный возврат. Пока кнопка зажата, наклон держится.")
         g, _ = self.section(r, "Курсор")
         self.slider(g, 0, "Размер", "render.cursor_scale", 0.5, 3, 0.05,
                     "1 — как в системе, с учётом масштаба экрана и масштаба захвата в сцене OBS.")
         g, h = self.section(r, "Шлейф · motion blur")
         self.toggle_row(h, "включён", "render.motion_blur").pack(side="right")
         self.slider(g, 0, "Длина", "render.blur_length", 0.1, 1.5, 0.05,
-                    "В долях кадра: 0.5 — как у камеры с выдержкой 180°. Пока курсор стоит или идёт анимация "
-                    "клика, шлейф не рисуется.")
-        self.slider(g, 1, "Плотность", "render.blur_opacity", 0.2, 2, 0.05, "Насколько заметен шлейф.")
+                    "В долях кадра: 0.5 — как у камеры с выдержкой 180°. В покое и при анимации клика шлейфа нет.")
+        self.slider(g, 1, "Плотность", "render.blur_opacity", 0.2, 2, 0.05,
+                    "Насколько заметен шлейф. В точном режиме не используется.")
+        def acc_changed():
+            rc = self.cfg["render"]
+            if rc["blur_accurate"] and not rc["motion_blur"]:  # точный блюр — тоже шлейф: включаем его
+                rc["motion_blur"] = True
+                settings.save(self.cfg)
+                self.rebuild()
+
+        acc = self.toggle_row(g, "Точный, как у камеры — рендер дольше", "render.blur_accurate", acc_changed)
+        acc.grid(row=2, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        self.hint_on((acc, *acc.winfo_children()), "Точный",  # строка под превью — одна, не длиннее 720 px
+                     "смаз по всей выдержке вместо копий. Цена: рендер до 1,6× дольше, шлейф бледнее, превью "
+                     "упрощённое.")
 
     def tab_output(self, p):
         l, r = self.columns(p)

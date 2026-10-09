@@ -108,4 +108,5 @@ def frame_track(log, fps, n_frames, sm, offset_ms, ghost_ms=()):
     press_len = lens[last]        # сколько кнопку держали (пока держат — inf)
     return {"t": tf, "x": sx[i], "y": sy[i], "raw_x": rx[i], "raw_y": ry[i], "visible": gvis[i],
             "type": s[j[i], 3].astype(int), "click_age": click_age, "press_len": press_len,
-            "ghosts": [(sx[idx(tf - g)], sy[idx(tf - g)]) for g in ghost_ms]}
+            "ghosts": [(sx[idx(tf - g)], sy[idx(tf - g)]) for g in ghost_ms],
+            "path": (tg, sx, sy, gvis)}  # вся траектория с шагом 1 мс — для точного motion blur

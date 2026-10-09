@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -154,7 +155,8 @@ def probe(ffprobe, video):
     j = json.loads(r.stdout)
     s = j["streams"][0]
     num, den = map(int, s["r_frame_rate"].split("/"))
-    return {"w": s["width"], "h": s["height"], "fps": num / den, "frames": int(s["nb_read_packets"]),
+    return {"w": s["width"], "h": s["height"], "fps": num / den, "rate": s["r_frame_rate"],
+            "frames": int(s["nb_read_packets"]),
             "duration": float(j["format"]["duration"]), "pix_fmt": s.get("pix_fmt", "yuv420p"),
             # без тегов считаем как OBS по умолчанию: BT.709, ограниченный диапазон
             "space": tag(s, "color_space"), "range": "pc" if s.get("color_range") == "pc" else "tv",
@@ -196,24 +198,46 @@ def make_sprites(work, types, clicked, size, rc):
     return out
 
 
-def write_commands(path, track, info, types, slots, clip):
+def sprite_name(track, n, types, have):
+    """Тип курсора в кадре n и его спрайт с учётом шага анимации клика (нет такого — обычный курсор)."""
+    t = types[track["type"][n]] if track["type"][n] < len(types) else "arrow"
+    t = t if f"{t}_0" in have else "arrow"
+    main = f"{t}_{track['level'][n]}"
+    return t, main if main in have else f"{t}_0"
+
+
+BLUR_LAG = 4  # на сколько кадров вперёд ffmpeg может заглянуть, пока ждёт слой точного блюра (с запасом)
+
+
+def piecewise(vals, n0, fps, t0):
+    """Выражение ffmpeg от времени кадра t: значение кадра n0+i — до середины между ним и следующим кадром."""
+    e = str(vals[-1])
+    for i in range(len(vals) - 2, -1, -1):
+        if vals[i] != vals[i + 1]:
+            e = f"if(lt(t,{(n0 + i + 0.5) / fps - t0:.6f}),{vals[i]},{e})"
+    return e
+
+
+def write_commands(path, track, info, types, slots, clip, blur=None):
     """sendcmd: на каждом кадре двигаем только изменившиеся overlay. Координаты — уже в пикселях видео
-    (vx, vy, vghosts, raw_vx). clip = (начало, конец) в секундах."""
+    (vx, vy, vghosts, raw_vx). clip = (начало, конец) в секундах. blur — {кадр: левый верхний угол} слоя
+    точного motion blur: тогда курсор рисует он, а не спрайты со шлейфом из копий."""
     hot = {name: (hx, hy) for name, _, hx, hy in slots}
     fps, (t0, t1) = info["fps"], clip
     n_ghosts = len(track["vghosts"])
     state = {name: None for name in hot}
+    pos = lambda k: blur.get(k, (HIDE, 0))
     with open(path, "w", encoding="ascii") as f:
         for n in range(len(track["x"])):
             if not t0 - 1 / fps <= n / fps <= t1 + 1 / fps:
                 continue
             want = {}
-            t = types[track["type"][n]] if track["type"][n] < len(types) else "arrow"
-            t = t if f"{t}_0" in hot else "arrow"
-            if track["visible"][n]:
+            t, main = sprite_name(track, n, types, hot)
+            if blur is not None:
+                pass  # слой точного блюра двигаем ниже — отдельными командами
+            elif track["visible"][n]:
                 x, y, lvl = track["vx"][n], track["vy"][n], track["level"][n]
-                main = f"{t}_{lvl}"
-                want[main if main in hot else f"{t}_0"] = (x, y)
+                want[main] = (x, y)
                 # Шлейф только в движении и не во время анимации клика: несжатые «призраки» торчали бы из-под
                 # наклонённого курсора, а в покое утолщали бы его края.
                 for gi, (gx, gy) in enumerate(track["vghosts"]):
@@ -230,11 +254,102 @@ def write_commands(path, track, info, types, slots, clip):
                 if new != cur:
                     cmds += [f"overlay@{name} x {new[0]}", f"overlay@{name} y {new[1]}"] if new else [f"overlay@{name} x {HIDE}"]
                     state[name] = new
+            if blur is not None and pos(n) != pos(n - 1):
+                # Вход слоя — поток, и ffmpeg, прежде чем смешать кадр, заглядывает в следующий: команда кадра n
+                # срабатывает до того, как смешаны прошлые. Поэтому позиция — функция времени кадра t с запасом
+                # на BLUR_LAG кадров назад: каждый кадр берёт свою, когда бы команда ни сработала.
+                for axis in (0, 1):
+                    vals = [pos(k)[axis] for k in range(n - BLUR_LAG, n + 1)]
+                    cmds.append(f"overlay@blur {'xy'[axis]} '{piecewise(vals, n - BLUR_LAG, fps, t0)}'")
             if cmds:
                 # ffmpeg отсчитывает время кадров от начала файла (или от -ss). Окно в 1 с: команда сработает
                 # и при выпавших кадрах, а sendcmd не будет перебирать старые интервалы.
                 ts = max(0.0, (n - 0.5) / fps - t0)
                 f.write(f"{ts:.6f}-{ts + 1:.6f} {', '.join(cmds)};\n")
+
+
+BLUR_CAP, BLUR_SAMPLES = 512, 256  # точный motion blur: слой не больше 512 px, до 256 выборок за выдержку
+
+
+def blur_plan(track, sprites, types, fps, rc, grid, f0, f1):
+    """Точный motion blur, как у камеры: курсор усреднён по всем моментам выдержки [t − blur_length кадра, t]
+    с шагом ≈ 1 px пути, а не нарисован отдельными копиями. Каждый кадр курсора — готовый слой RGBA.
+
+    sprites: {имя: (RGBA float32, hotspot)}; grid: (время мс, x, y, виден) траектории с шагом 1 мс в пикселях
+    видео; f0…f1 — нужные кадры. Возвращает (ширина, высота слоя, {кадр: левый верхний угол}, байты слоёв).
+    Хвост длиннее BLUR_CAP обрезается: при такой скорости он почти прозрачный."""
+    tg, gx, gy, gv = grid
+    S, tf = rc["blur_length"] * 1000 / fps, track["t"]
+    prem = {}  # спрайты с премультиплицированной альфой: их можно просто складывать
+    for name, (img, hot) in sprites.items():
+        a = img[..., 3:] / 255
+        prem[name] = (np.concatenate([img[..., :3] * a, a], -1).astype(np.float32), hot)
+    sw = max(p.shape[1] for p, _ in prem.values()) + 2
+    sh = max(p.shape[0] for p, _ in prem.values()) + 2
+    m1 = min(f1, len(tf))  # дальше конца видео — пустые слои (запас, чтобы конец задавало видео)
+    # длина пути за выдержку: по ней число выборок и размер слоя (по 99.5% кадров, чтобы один рывок не раздул все)
+    probe = tf[f0:m1, None] - S * np.linspace(0, 1, 9)
+    px, py = np.interp(probe, tg, gx), np.interp(probe, tg, gy)
+    k = np.clip(np.ceil(np.hypot(np.diff(px), np.diff(py)).sum(1)), 1, BLUR_SAMPLES).astype(int)
+    vis = track["visible"][f0:m1]
+    pw, ph = sw, sh
+    if vis.any():
+        pw = int(np.clip(np.percentile(np.ptp(px[vis], 1), 99.5) + sw, sw, BLUR_CAP))
+        ph = int(np.clip(np.percentile(np.ptp(py[vis], 1), 99.5) + sh, sh, BLUR_CAP))
+
+    def samples(f):
+        """Левые верхние углы спрайта во все моменты выдержки кадра f, где курсор был виден (первый — сейчас)."""
+        p, (hx, hy) = prem[names[f]]
+        ts = tf[f] - S * np.arange(k[f - f0]) / k[f - f0]
+        keep = gv[np.clip(np.round((ts - tg[0]) / smoothing.STEP_MS).astype(int), 0, len(tg) - 1)]
+        return (np.round(np.interp(ts[keep], tg, gx) - hx).astype(int),
+                np.round(np.interp(ts[keep], tg, gy) - hy).astype(int))
+
+    names, origin = {}, {}
+    for f in range(f0, m1):
+        if track["visible"][f]:
+            names[f] = sprite_name(track, f, types, prem)[1]
+            xs, ys = samples(f)
+            if not xs.size:  # в момент кадра курсор виден, так что сюда не попадаем — но без падения
+                del names[f]
+                continue
+            h, w = prem[names[f]][0].shape[:2]
+            # слой целиком вмещает след; если не вмещает — ведущий (нынешний) курсор целый, обрезается хвост
+            origin[f] = (int(min(max(xs.min(), xs[0] + w - pw), xs[0])),
+                         int(min(max(ys.min(), ys[0] + h - ph), ys[0])))
+
+    def layers():
+        empty, still = bytes(pw * ph * 4), {}
+        for f in range(f0, f1):
+            if f not in names:
+                yield empty
+                continue
+            p, _ = prem[names[f]]
+            h, w = p.shape[:2]
+            xs, ys = samples(f)
+            xs, ys = xs - origin[f][0], ys - origin[f][1]
+            static = len(xs) == k[f - f0] and not (xs.any() or ys.any())  # курсор стоит — просто спрайт
+            if static and names[f] in still:
+                yield still[names[f]]
+                continue
+            bx0, by0 = max(xs.min(), 0), max(ys.min(), 0)
+            bx1, by1 = min(xs.max() + w, pw), min(ys.max() + h, ph)
+            acc = np.zeros((by1 - by0, bx1 - bx0, 4), np.float32)
+            pos, cnt = np.unique(np.stack([xs, ys], 1), axis=0, return_counts=True)
+            for (x, y), c in zip(pos.tolist(), cnt.tolist()):
+                x0, y0, x1, y1 = max(x, bx0), max(y, by0), min(x + w, bx1), min(y + h, by1)
+                if x0 < x1 and y0 < y1:
+                    acc[y0 - by0:y1 - by0, x0 - bx0:x1 - bx0] += p[y0 - y:y1 - y, x0 - x:x1 - x] * c
+            out = np.zeros((ph, pw, 4), np.uint8)
+            a = acc[..., 3]
+            out[by0:by1, bx0:bx1, :3] = np.clip(acc[..., :3] / np.maximum(a, 1e-6)[..., None] + 0.5, 0, 255)
+            out[by0:by1, bx0:bx1, 3] = np.clip(a * (255 / k[f - f0]) + 0.5, 0, 255)  # доля выдержки, когда виден
+            buf = out.tobytes()
+            if static:
+                still[names[f]] = buf
+            yield buf
+
+    return pw, ph, origin, layers()
 
 
 def export_csv(path, track, w, h, fps, types):
@@ -287,8 +402,9 @@ def render(video, log_path, cfg, progress=None, clip=None):
              info["w"], info["h"], fps, t("{}–{} с").format(f"{clip[0]:.1f}", f"{span[1]:.1f}") if clip
              else t("{} кадров").format(info["frames"]), offset, codec)
 
+    accurate = rc["motion_blur"] and rc["blur_accurate"]  # точный motion blur вместо шлейфа из копий
     ghost_ms = [1000 / fps * rc["blur_length"] * (i + 1) / len(ghost_alphas(rc))
-                for i in range(len(ghost_alphas(rc)))] if rc["motion_blur"] else []
+                for i in range(len(ghost_alphas(rc)))] if rc["motion_blur"] and not accurate else []
     track = smoothing.frame_track(lg, fps, info["frames"], sm, offset, ghost_ms)
     press = click_curve(track["click_age"], rc["click_ms"], track["press_len"]) if rc["click_animation"] else np.zeros(len(track["x"]))
     track["level"] = np.round(press * (CLICK_STEPS - 1)).astype(int)
@@ -315,23 +431,43 @@ def render(video, log_path, cfg, progress=None, clip=None):
 
     with tempfile.TemporaryDirectory(prefix="smooth_cursor_") as tmp:
         work = Path(tmp)
-        slots = make_sprites(work, used, clicked, size, rc)
-        write_commands(work / "cmds.txt", track, info, types, slots, span)
+        slots = make_sprites(work, used, clicked, size, {**rc, "motion_blur": rc["motion_blur"] and not accurate})
+        blur = layers = None
+        if accurate:  # курсор — один слой, кадры которого считаем здесь и подаём ffmpeg через stdin
+            sprites = {name: (np.asarray(Image.open(work / png), np.float32), (hx, hy))
+                       for name, png, hx, hy in slots if name != "raw"}
+            slots = [("blur", None, 0, 0)] + [s for s in slots if s[0] == "raw"]
+            f0 = int(np.ceil(span[0] * fps - 1e-6)) if clip else 0  # первый кадр превью
+            f1 = (int(span[1] * fps) + 3 if clip else info["frames"]) + 2  # слоёв — с запасом: конец задаёт видео
+            tg, sx, sy, gvis = track["path"]
+            gv = gvis & (sx >= cl) & (sx < cr) & (sy >= ct) & (sy < cb)
+            pw, ph, blur, layers = blur_plan(track, sprites, types, fps, rc, (tg, *to_video(sx, sy), gv), f0, f1)
+            log.info(t("Точный motion blur: слой %dx%d px"), pw, ph)
+            blur_in = ["-f", "rawvideo", "-pixel_format", "rgba", "-video_size", f"{pw}x{ph}", "-framerate",
+                       info["rate"], "-i", "pipe:0"]
+            blur_off = (f0 - 0.5) / fps - span[0]
+        write_commands(work / "cmds.txt", track, info, types, slots, span, blur)
         # Накладываем прямо в YUV исходника: через RGB (format=auto) цвета видео чуть съезжают
         pf = info["pix_fmt"]
         sub = "444" if "444" in pf else "422" if "422" in pf else "420"
         deep = "10" in pf or "12" in pf or "16" in pf
         chain = [f"[0:v]format=yuv{sub}p{'10le' if deep else ''},sendcmd=f=cmds.txt[v0]"]
         for i, (name, *_) in enumerate(slots, 1):
-            chain.append(f"[v{i - 1}][{i}:v]overlay@{name}=x={HIDE}:y=0:format=yuv{sub}{'p10' if deep else ''}"
-                         f":eof_action=repeat[v{i}]")
+            inp = f"[{i}:v]"
+            if name == "blur":
+                # Слой кадра n — на полкадра раньше самого кадра (как окна sendcmd), чтобы кадр видео взял именно
+                # его. Сдвиг — в микросекундах: в шкале самого слоя (1/fps) он округлился бы до целого кадра.
+                chain.append(f"{inp}settb=AVTB,setpts=PTS+({blur_off:.6f})/TB[bl]")
+                inp = "[bl]"
+            chain.append(f"[v{i - 1}]{inp}overlay@{name}=x={HIDE}:y=0:format=yuv{sub}{'p10' if deep else ''}"
+                         f":eof_action=repeat{':shortest=1' if name == 'blur' else ''}[v{i}]")  # видео кончилось — всё
         (work / "graph.txt").write_text(";".join(chain), encoding="ascii")
         cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-nostats", "-progress", "pipe:1", "-hwaccel", "auto"]
         if clip:
             cmd += ["-ss", f"{clip[0]:.3f}", "-t", f"{clip[1]:.3f}"]
         cmd += ["-i", str(video)]
-        for _, png, *_ in slots:
-            cmd += ["-i", png]
+        for name, png, *_ in slots:
+            cmd += blur_in if name == "blur" else ["-i", png]
         cmd += ["-/filter_complex", "graph.txt", "-map", f"[v{len(slots)}]", "-map", "0:a?", "-c:a", "copy",
                 "-c:v", codec, *encoder_args(codec, rc["cq"], rc["preset"]), "-fps_mode", "passthrough",
                 "-colorspace", info["space"], "-color_range", info["range"],
@@ -342,12 +478,28 @@ def render(video, log_path, cfg, progress=None, clip=None):
         cmd.append(str(part))
         with open(work / "ffmpeg.log", "w+", encoding="utf-8", errors="replace") as err:
             p = subprocess.Popen(cmd, cwd=work, stdout=subprocess.PIPE, stderr=err, text=True,
-                                 creationflags=CREATE_NO_WINDOW)
+                                 stdin=subprocess.PIPE if layers else None, creationflags=CREATE_NO_WINDOW)
+            failed = []
+            if layers:
+                def feed():  # в отдельном потоке: ffmpeg берёт слои по мере надобности, прогресс читаем здесь
+                    try:
+                        for buf in layers:
+                            p.stdin.buffer.write(buf)
+                        p.stdin.close()
+                    except OSError:  # ffmpeg уже закрылся (отмена, ошибка) — причину скажет он сам
+                        pass
+                    except Exception as e:  # сбой расчёта слоя — нельзя молча доделать видео без курсора
+                        failed.append(e)
+                        p.kill()
+
+                threading.Thread(target=feed, daemon=True).start()
             try:
                 for line in p.stdout:
                     if line.startswith("out_time_us=") and line[12:].strip().isdigit():
                         if progress(int(line[12:]) / 1e4 / duration):
                             raise RuntimeError(t("рендер отменён"))
+                if failed:
+                    raise failed[0]
                 if p.wait():
                     err.seek(0)
                     tail = "".join(err.readlines()[-15:])

@@ -1,4 +1,5 @@
 """Самопроверка без OBS: python selftest.py"""
+import copy
 import json
 import subprocess
 import tempfile
@@ -136,6 +137,58 @@ def check_render():
         assert (tmp / "src_cursor.csv").read_text(encoding="utf-8").count("\n") == src["frames"] + 1
 
 
+def check_accurate_blur():
+    """Точный motion blur. В покое (клик, смена курсора) — пиксель в пиксель как обычный режим: значит, слой и его
+    позиция попадают в свой кадр. В движении — смаз сплошной и несёт столько же света, сколько неподвижный курсор.
+    Превью с дробного начала — те же кадры, что полный рендер."""
+    W, H, FPS = 1920, 1080, 30
+    t = np.arange(-200, 4000, 1000 / 240)
+    x = np.clip(300 + 3.0 * (t - 1600), 300, 1800)  # стоит → рывок вправо 3000 px/с (1600–2100 мс) → стоит
+    log = {"display": {"width": W, "height": H, "dpi": 96}, "types": wc.TYPES,
+           "samples": [[a, float(b), 300.0, int(1000 <= a < 1300), 1] for a, b in zip(t.tolist(), x)],
+           "clicks": [[300.0, "L", 1, 300, 300], [380.0, "L", 0, 300, 300],
+                      [2600.0, "L", 1, 1800, 300], [2700.0, "L", 0, 1800, 300]]}
+    cfg = settings.load()
+    cfg["sync"]["offset_ms"] = 0
+    cfg["render"].update(codec="libx264", click_animation=True, motion_blur=True, blur_length=1.0, debug_raw=False,
+                         export_keyframes=False, cursor_scale=1.0)
+    ff = render.tool(cfg["render"]["ffmpeg"], "ffmpeg")
+    args, render.encoder_args = render.encoder_args, lambda codec, cq, preset: ["-qp", "0", "-pix_fmt", "yuv420p"]
+    try:  # без потерь (crf 0 — нет): сравниваем пиксели
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            video, lp = tmp / "b.mp4", tmp / "b.cursor.json"
+            subprocess.run([ff, "-v", "error", "-f", "lavfi", "-i", f"color=c=black:s={W}x{H}:r={FPS}:d=4", "-c:v",
+                            "libx264", "-qp", "0", "-pix_fmt", "yuv420p", "-colorspace", "bt709", "-color_primaries",
+                            "bt709", "-color_trc", "bt709", "-color_range", "tv", str(video)], check=True)
+            lp.write_text(json.dumps(log))
+
+            def luma(accurate, clip=None):  # яркость Y как есть (16 — чёрный)
+                c = copy.deepcopy(cfg)
+                c["render"]["blur_accurate"] = accurate
+                out = render.render(video, lp, c, progress=lambda pct: False, clip=clip)
+                raw = subprocess.run([ff, "-v", "error", "-i", str(out), "-f", "rawvideo", "-pix_fmt", "yuv420p", "-"],
+                                     capture_output=True, check=True).stdout
+                out.unlink()
+                return np.frombuffer(raw, np.uint8).reshape(-1, W * H * 3 // 2)[:, :W * H].reshape(-1, H, W) \
+                    .astype(int) - 16
+
+            G, A = luma(False), luma(True)
+            assert len(A) == len(G) == 4 * FPS
+            bad = [n for n in list(range(47)) + list(range(80, 120)) if (A[n] != G[n]).any()]
+            assert not bad and (G[10] != G[2]).any(), ("в покое точный ≠ обычному", bad)
+            for n in (56, 58, 60):
+                row = np.nonzero(A[n].max(1) > 4)[0].min() + 10
+                on = np.nonzero(A[n][row] > 4)[0]
+                assert (np.diff(on) == 1).all() and on[-1] - on[0] > 80, (n, "смаз с разрывами или короткий")
+                assert abs(A[n].sum() / A[40].sum() - 1) < 0.03, (n, "смаз несёт не столько света, сколько курсор")
+            P = luma(True, clip=(1.73, 0.5))
+            assert len(P) == 15 and all((P[k] == A[52 + k]).all() for k in range(len(P))), "превью сдвинуто"
+    finally:
+        render.encoder_args = args
+    print("точный motion blur: ок")
+
+
 def check_presets():
     import copy
     cfg = copy.deepcopy(settings.DEFAULTS)
@@ -154,4 +207,5 @@ if __name__ == "__main__":
     check_click_animation()
     check_obs_transform()
     check_render()
+    check_accurate_blur()
     print("selftest OK")

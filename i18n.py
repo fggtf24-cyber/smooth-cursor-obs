@@ -173,16 +173,28 @@ EN.update({
     "Наклон": "Tilt", "Градусы против часовой вокруг кончика стрелки; минус — по часовой.":
         "Degrees counter-clockwise around the arrow tip; negative is clockwise.",
     "Длительность": "Duration",
-    "мс: первая четверть — курсор вжимается, остальное время плавно возвращается. Пока кнопка зажата, наклон держится.":
+    "мс: первая четверть — нажатие, затем плавный возврат. Пока кнопка зажата, наклон держится.":
         "ms: the first quarter presses in, the rest eases back. The tilt holds while the button is down.",
     "Курсор": "Cursor", "Размер": "Size",
     "1 — как в системе, с учётом масштаба экрана и масштаба захвата в сцене OBS.":
         "1 is the system size, adjusted for display scaling and the capture scale in the OBS scene.",
     "Шлейф · motion blur": "Trail · motion blur", "Длина": "Length",
-    "В долях кадра: 0.5 — как у камеры с выдержкой 180°. Пока курсор стоит или идёт анимация клика, шлейф не "
-    "рисуется.": "In frames: 0.5 is like a camera with a 180° shutter. No trail while the cursor rests or a click "
+    "В долях кадра: 0.5 — как у камеры с выдержкой 180°. В покое и при анимации клика шлейфа нет.": "In frames: 0.5 is like a camera with a 180° shutter. No trail while the cursor rests or a click "
                 "animation plays.",
-    "Плотность": "Density", "Насколько заметен шлейф.": "How visible the trail is.",
+    "Плотность": "Density",
+    "Насколько заметен шлейф. В точном режиме не используется.":
+        "How visible the trail is. Not used in accurate mode.",
+    "Точный, как у камеры — рендер дольше": "Accurate, like a camera — slower render",
+    "Точный motion blur": "Accurate motion blur", "точный блюр": "accurate blur",
+    "Точный": "Accurate",
+    "смаз по всей выдержке вместо копий. Цена: рендер до 1,6× дольше, шлейф бледнее, превью упрощённое.":
+        "smear over the whole shutter instead of copies. Cost: up to 1.6× slower render, fainter trail, "
+        "simplified preview.",
+    "Как у камеры: курсор смазан по всей выдержке,\nа не нарисован копиями. Цена: на быстрых рывках\nрендер до "
+    "1,6× дольше, шлейф бледнее копий.":
+        "Like a camera: the cursor is smeared over the whole\nshutter instead of drawn as copies. Cost: up to 1.6×\n"
+        "slower render on fast moves, a fainter trail.",
+    "Точный motion blur: слой %dx%d px": "Accurate motion blur: layer %dx%d px",
     # --- вывод ---
     "Кодирование": "Encoding", "Кодек": "Codec", "Авто": "Auto", "Процессор": "CPU", "Пресет": "Preset",
     "Качество (CQ)": "Quality (CQ)",
