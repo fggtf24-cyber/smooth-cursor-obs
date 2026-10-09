@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import numpy as np
@@ -303,6 +304,10 @@ def render(video, log_path, cfg, progress=None, clip=None):
     size = max(4, round(wc.cursor_base_size() * disp["dpi"] / 96 * rc["cursor_scale"] * zoom))
     if clip:
         out = Path(tempfile.gettempdir()) / f"{video.stem}_preview.mp4"
+        try:
+            out.unlink(missing_ok=True)
+        except OSError:  # прошлое превью ещё открыто в плеере
+            out = out.with_name(f"{video.stem}_preview_{time.strftime('%H%M%S')}.mp4")
     else:
         out = video.with_name(video.stem + ("_smooth_debug" if rc["debug_raw"] else "_smooth") + ".mp4")
         if rc["export_keyframes"]:
@@ -333,20 +338,29 @@ def render(video, log_path, cfg, progress=None, clip=None):
                 "-color_trc", info["trc"], "-color_primaries", info["primaries"]]
         if codec.startswith("hevc"):
             cmd += ["-tag:v", "hvc1"]
-        cmd.append(str(out))
+        part = out.with_name(out.stem + ".part.mp4")  # оборванный рендер не затрёт готовый и не выдаст себя за него
+        cmd.append(str(part))
         with open(work / "ffmpeg.log", "w+", encoding="utf-8", errors="replace") as err:
             p = subprocess.Popen(cmd, cwd=work, stdout=subprocess.PIPE, stderr=err, text=True,
                                  creationflags=CREATE_NO_WINDOW)
-            for line in p.stdout:
-                if line.startswith("out_time_us=") and line[12:].strip().isdigit():
-                    if progress(int(line[12:]) / 1e4 / duration):
-                        p.kill()
-                        p.wait()
-                        raise RuntimeError(t("рендер отменён"))
-            if p.wait():
-                err.seek(0)
-                tail = "".join(err.readlines()[-15:])
-                raise RuntimeError(t("ffmpeg завершился с кодом {}:\n{}").format(p.returncode, tail))
+            try:
+                for line in p.stdout:
+                    if line.startswith("out_time_us=") and line[12:].strip().isdigit():
+                        if progress(int(line[12:]) / 1e4 / duration):
+                            raise RuntimeError(t("рендер отменён"))
+                if p.wait():
+                    err.seek(0)
+                    tail = "".join(err.readlines()[-15:])
+                    raise RuntimeError(t("ffmpeg завершился с кодом {}:\n{}").format(p.returncode, tail))
+            except BaseException:
+                p.kill()
+                p.wait()
+                part.unlink(missing_ok=True)
+                raise
+    try:
+        os.replace(part, out)
+    except OSError:  # старый результат открыт в плеере — новый не выбрасываем
+        raise RuntimeError(t("{} открыт в другой программе — новый рендер сохранён как {}").format(out.name, part.name))
     progress(100)
 
     o = probe(ffprobe, out)

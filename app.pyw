@@ -557,7 +557,7 @@ class Onboarding(tk.Frame):
         self.place(x=0, y=0, relwidth=1, relheight=1)
         self.lift()
         page = tk.Frame(self, bg=BG)
-        page.pack(fill="both", expand=True, padx=110, pady=(46, 40))
+        page.pack(fill="both", expand=True, padx=app.padx, pady=app.pady)
         top = tk.Frame(page, bg=BG)
         top.pack(fill="x")
         pixel_logo(top).pack(side="left", padx=(0, 12))
@@ -678,7 +678,7 @@ class Onboarding(tk.Frame):
 
     def s_obs(self, p):
         a = self.app
-        self.para(p, t("1. Установите и откройте OBS Studio (версия 28 или новее).\n"
+        self.para(p, t("1. Установите и откройте OBS Studio (версия 30 или новее).\n"
                        "2. В OBS: Сервис → Настройки сервера WebSocket.\n"
                        "3. Включите «Включить сервер WebSocket». Если включена аутентификация — нажмите «Показать "
                        "данные для подключения» и перенесите пароль сюда."))
@@ -751,7 +751,9 @@ class Onboarding(tk.Frame):
             return self.scr_status.config(text=t("Сначала подключите OBS — шаг 2."), fg=RED)
         if a.recorder.recording:
             return self.scr_status.config(text=t("Идёт запись — сначала остановите её."), fg=RED)
-        mon = next(m for m in a.monitors if m["device"].split("\\")[-1] == self.mon_choice)
+        mon = next((m for m in wc.list_monitors() if m["device"].split("\\")[-1] == self.mon_choice), None)
+        if mon is None:  # монитор отключили
+            return self.scr_status.config(text=t("монитор «{}» не найден").format(self.mon_choice), fg=RED)
         self.scr_status.config(text=t("Настраиваю OBS…"), fg=INK2)
 
         def work():
@@ -785,9 +787,10 @@ class Onboarding(tk.Frame):
         a.lbl(p, t("ГОРЯЧАЯ КЛАВИША"), "caps", INK).pack(anchor="w", pady=(18, 6))
         row = tk.Frame(p, bg=BG)
         row.pack(anchor="w")
-        e, _ = a.entry(row, "hotkey", width=14)
+        e, var = a.entry(row, "hotkey", width=14, live=False)
         e.pack(side="left", ipady=3)
-        Btn(row, t("Применить"), a.apply_hotkey, small=True).pack(side="left", padx=10)
+        e.bind("<Return>", lambda _: a.apply_hotkey(var.get()))
+        Btn(row, t("Применить"), lambda: a.apply_hotkey(var.get()), small=True).pack(side="left", padx=10)
         a.lbl(row, t("старт и стоп записи из любой программы"), "small", MUTE).pack(side="left")
 
     def change_folder(self):
@@ -834,6 +837,7 @@ class App:
         self.monitors = wc.list_monitors()
         self.detected, self.last_fps, self.log_lines, self.log_win = None, None, [], None
         self.spec, self.page, self.encoder, self.onboarding = {"obs": "offline"}, "rec", None, None
+        self.encoder_src = None  # для какого пути к ffmpeg определён кодировщик
         self.ffmpeg_installing = self.ffmpeg_asked = False
         i18n.LANG = self.cfg["ui"]["lang"]
 
@@ -847,8 +851,11 @@ class App:
                  mono=(mono, 10), mono_s=(mono, 8), mono_b=(mono, 15))
 
         root.title(APP)
-        root.geometry("1460x960")
-        root.minsize(1400, 900)
+        # Вёрстка в пикселях; на маленьком экране (1366×768) — узкие поля и прокрутка вместо обрезанного низа
+        sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+        self.padx, self.pady = max(16, min(110, (sw - 1300) // 2)), (46, 34) if sh >= 1000 else (12, 12)
+        root.geometry(f"{min(1460, sw - 40)}x{min(960, sh - 100)}")
+        root.minsize(min(1400, sw - 60), min(900, sh - 120))
         if (BASE / "assets" / "icon.ico").exists():
             root.iconbitmap(default=str(BASE / "assets" / "icon.ico"))
         root.configure(bg=BG)
@@ -871,7 +878,18 @@ class App:
         self.renderer.submit(self._detect_encoder)
         if not self.cfg["ui"]["onboarded"]:
             self.open_onboarding()
+        self.root.after(2000, self.watch_monitors)
         self.root.after(3000, lambda: threading.Thread(target=self._check_update, daemon=True).start())
+
+    def watch_monitors(self):
+        """Мониторы могли поменяться (подключили, сменили разрешение) — схема и живое превью берут свежие."""
+        self.root.after(2000, self.watch_monitors)
+        mons = wc.list_monitors()
+        if mons and mons != self.monitors:  # пустой список бывает на миг при перенастройке экранов
+            self.monitors = mons
+            for p in (getattr(self, "picker", None), getattr(self.onboarding, "picker", None)):
+                if p and p.winfo_exists():
+                    p.draw()
 
     # ---------- обновления ----------
     def _check_update(self):
@@ -941,17 +959,23 @@ class App:
         self.q.put((fn, args, kw))
 
     def pump(self):
-        try:
-            while True:
+        self.root.after(50, self.pump)  # первым делом: на этой очереди хоткей и старт/стоп записи
+        while True:
+            try:
                 fn, args, kw = self.q.get_nowait()
+            except queue.Empty:
+                break
+            try:
                 fn(*args, **kw)
-        except queue.Empty:
-            pass
+            except tk.TclError:  # виджет успел исчезнуть (сменили шаг настройки, язык) — не страшно
+                pass
+            except Exception:
+                if fn != self.append_log:
+                    log.error(traceback.format_exc())
         if self.state == "recording":
             s = int(time.time() - self.rec_t0)
             self.time_lbl.config(text=f"{s // 60:02d}:{s % 60:02d}")
             self.rec_dot.config(fg=RED if s % 2 == 0 else BG)
-        self.root.after(50, self.pump)
 
     def schedule_save(self):
         if self._save_job:
@@ -968,8 +992,16 @@ class App:
         return tk.Label(parent, text=text, font=F[font], fg=fg, bg=parent["bg"], **kw)
 
     def build(self):
-        page = tk.Frame(self.root, bg=BG)  # «паспарту»: всё вписано в невидимую рамку с большими полями
-        page.pack(fill="both", expand=True, padx=110, pady=(46, 34))
+        self.scroller = sc = tk.Canvas(self.root, bg=BG, highlightthickness=0)  # прокрутка, если окно ниже содержимого
+        self.scrollbar = ttk.Scrollbar(self.root, command=sc.yview)
+        sc.configure(yscrollcommand=self.scrollbar.set)
+        sc.pack(side="left", fill="both", expand=True)
+        self.holder = tk.Frame(sc, bg=BG)
+        self.holder_win = sc.create_window(0, 0, anchor="nw", window=self.holder)
+        sc.bind("<Configure>", lambda e: self.fit_page())
+        self.root.bind_all("<MouseWheel>", self.wheel)
+        page = tk.Frame(self.holder, bg=BG)  # «паспарту»: всё вписано в невидимую рамку с большими полями
+        page.pack(fill="both", expand=True, padx=self.padx, pady=self.pady)
 
         # верх: знак слева, навигация справа — как у референса
         top = tk.Frame(page, bg=BG)
@@ -1030,7 +1062,7 @@ class App:
         top_now = tk.Frame(now, bg=BG)
         top_now.pack(fill="x", pady=(0, 6))
         self.lbl(top_now, t("СЕЙЧАС В OBS"), "caps", INK).pack(side="left")
-        Btn(top_now, t("Обновить"), self.refresh_obs, small=True).pack(side="left", padx=(14, 0))
+        Btn(top_now, t("Проверить"), self.refresh_obs, small=True).pack(side="left", padx=(14, 0))
         self.now = [self.lbl(now, "", "small", INK2, anchor="w") for _ in range(3)]
         for w in self.now:
             w.pack(anchor="w")
@@ -1075,6 +1107,25 @@ class App:
         self.set_state(self.state)
         self.set_spec()
 
+    def fit_page(self):
+        """Страница во всю ширину; по высоте — не меньше окна, а если не влезает — появляется прокрутка."""
+        sc, need = self.scroller, self.holder.winfo_reqheight()
+        w, h = sc.winfo_width(), max(sc.winfo_height(), need)
+        sc.itemconfig(self.holder_win, width=w, height=h)
+        sc.configure(scrollregion=(0, 0, w, h))
+        if need > sc.winfo_height():
+            self.scrollbar.pack(side="right", fill="y", before=sc)
+        else:
+            self.scrollbar.pack_forget()
+            sc.yview_moveto(0)
+
+    def wheel(self, e):
+        """Колесо прокручивает страницу, если она не влезла, — кроме ползунков, списка записей и журнала."""
+        w, ob = e.widget, self.onboarding
+        if (self.scrollbar.winfo_ismapped() and isinstance(w, tk.Misc) and w.winfo_toplevel() is self.root
+                and not isinstance(w, (Slider, tk.Text, ttk.Treeview)) and not (ob and ob.winfo_exists())):
+            self.scroller.yview_scroll(-1 if e.delta > 0 else 1, "units")
+
     def lang_switch(self, parent):
         f = tk.Frame(parent, bg=parent["bg"])
         for code in ("ru", "en"):
@@ -1112,6 +1163,7 @@ class App:
         self.onboarding = Onboarding(self, step)
 
     def _detect_encoder(self):
+        self.encoder_src = self.cfg["render"]["ffmpeg"]
         try:
             ff = render.tool(self.cfg["render"]["ffmpeg"], "ffmpeg")
             self.encoder = render.pick_encoder(ff, "auto")
@@ -1208,6 +1260,7 @@ class App:
             label.config(fg=INK if n == name else MUTE)
             mark.config(bg=INK if n == name else BG)
         self.pages[name].pack(fill="both", expand=True)
+        self.root.after_idle(self.fit_page)  # вкладки разной высоты
 
     # ---------- элементы, привязанные к настройкам ----------
     def columns(self, p):
@@ -1300,7 +1353,8 @@ class App:
         pick(get(self.cfg, path), fire=False)
         return f
 
-    def entry(self, parent, path, width=24, show=None, conv=str):
+    def entry(self, parent, path, width=24, show=None, conv=str, live=True):
+        """Поле ввода; live — каждое изменение сразу в настройки (иначе значение забирает кнопка)."""
         var = tk.StringVar(value=f"{get(self.cfg, path):g}" if isinstance(get(self.cfg, path), float)
                            else get(self.cfg, path))
 
@@ -1311,7 +1365,8 @@ class App:
             except ValueError:
                 pass
 
-        var.trace_add("write", changed)
+        if live:
+            var.trace_add("write", changed)
         e = tk.Entry(parent, textvariable=var, width=width, show=show, relief="flat", bg=FIELD, fg=INK,
                      insertbackground=INK, font=F["mono"], highlightthickness=1, highlightbackground=LINE,
                      highlightcolor=INK)
@@ -1454,7 +1509,7 @@ class App:
         self.enc_lbl = self.lbl(g, "", "small", MUTE)
         self.enc_lbl.grid(row=3, column=0, columnspan=3, sticky="w", pady=(2, 0))
         self.slider(g, 1, "Качество (CQ)", "render.cq", 10, 35, 1,
-                    "Меньше — лучше и тяжелее файл; 18 — почти без потерь. Кодирует видеокарта (NVENC).")
+                    "Меньше — лучше и тяжелее файл; 18 — почти без потерь.")
         self.lbl(g, t("Пресет")).grid(row=2, column=0, sticky="w", pady=4)
         self.segmented(g, "render.preset", {f"p{i}": str(i) for i in range(1, 8)}).grid(
             row=2, column=1, columnspan=2, sticky="w")
@@ -1471,6 +1526,8 @@ class App:
         g, _ = self.section(r, "ffmpeg")
         e, self.ffmpeg_var = self.entry(g, "render.ffmpeg", width=40)
         e.grid(row=0, column=0, columnspan=2, sticky="ew", ipady=4)
+        for ev in ("<FocusOut>", "<Return>"):
+            e.bind(ev, lambda _: self.redetect_encoder())
         Btn(g, t("Обзор…"), self.choose_ffmpeg, small=True).grid(row=0, column=2, sticky="w", padx=(8, 0))
 
     def tab_obs(self, p):
@@ -1488,10 +1545,11 @@ class App:
         self.lbl(g, t("Старт и стоп")).grid(row=0, column=0, sticky="w", pady=3)
         row = tk.Frame(g, bg=BG)
         row.grid(row=0, column=1, columnspan=2, sticky="w")
-        e, self.hotkey_var = self.entry(row, "hotkey", width=14)
+        e, self.hotkey_var = self.entry(row, "hotkey", width=14, live=False)
         e.pack(side="left", ipady=3)
-        e.bind("<Return>", lambda _: self.apply_hotkey())
-        Btn(row, t("Применить"), self.apply_hotkey, small=True).pack(side="left", padx=10)
+        e.bind("<Return>", lambda _: self.apply_hotkey(self.hotkey_var.get()))
+        Btn(row, t("Применить"), lambda: self.apply_hotkey(self.hotkey_var.get()), small=True).pack(side="left",
+                                                                                                    padx=10)
         self.lbl(row, "F9, ctrl+shift+R, alt+F10", "small", MUTE).pack(side="left")
 
         g, h = self.section(r, "Что записывать")
@@ -1592,7 +1650,7 @@ class App:
             self.folder_pending = False
             log.info(t("OBS теперь сохраняет записи в %s"), folder)
         except Exception as e:
-            log.error(t("Не удалось сменить папку записей в OBS: %s"), e)
+            log.error(t("Не удалось сменить папку записей в OBS (нужен OBS 30 или новее): %s"), e)
 
     def check_display(self):
         if self.recorder:
@@ -1629,8 +1687,7 @@ class App:
         r = self.recorder
         try:
             if r.recording:
-                video, log_path = r.stop()
-                self.post(self.on_stopped, video, log_path)
+                self.post(self.on_stopped, r.stop())
             else:
                 r.start()
                 self.post(self.on_started)
@@ -1648,14 +1705,16 @@ class App:
         self.rec_t0 = time.time()
         self.set_state("recording")
 
-    def on_stopped(self, video, log_path):
+    def on_stopped(self, parts):
         self.set_state("idle")
         self.refresh_list()
-        if video and self.cfg["ui"]["auto_render"]:
-            self.enqueue(video, log_path)
+        for video, log_path in parts:
+            if video and self.cfg["ui"]["auto_render"]:
+                self.enqueue(video, log_path)
 
-    def apply_hotkey(self, initial=False):
-        new = self.cfg["hotkey"]
+    def apply_hotkey(self, new=None, initial=False):
+        """Регистрирует горячую клавишу; в настройки она попадает, только если заработала."""
+        new = (new or self.cfg["hotkey"]).strip()
         try:
             parse_hotkey(new)
         except (ValueError, KeyError, IndexError):
@@ -1668,6 +1727,9 @@ class App:
         try:
             self.hotkey = HotkeyThread(new, lambda: self.post(self.toggle)).start()
             log.info(t("Горячая клавиша: %s"), new)
+            if new != self.cfg["hotkey"]:
+                self.cfg["hotkey"] = new
+                self.schedule_save()
         except RuntimeError as e:
             self.hotkey = None
             log.error("%s", e)
@@ -1699,6 +1761,13 @@ class App:
         f = filedialog.askopenfilename(title="ffmpeg.exe", filetypes=[("ffmpeg", "ffmpeg.exe"), (t("Все"), "*.*")])
         if f:
             self.ffmpeg_var.set(f)
+            self.redetect_encoder()
+
+    def redetect_encoder(self):
+        """Путь к ffmpeg поменяли — заново узнать, чем кодировать (только если путь и правда другой)."""
+        if self.cfg["render"]["ffmpeg"] != self.encoder_src:
+            self.encoder_src = self.cfg["render"]["ffmpeg"]
+            self.renderer.submit(self._detect_encoder)
 
     def refresh_list(self):
         folder = self.folder()

@@ -93,17 +93,27 @@ class Obs:
         self.ev = obs.EventClient(**kw)
         self.started, self.stopped = threading.Event(), threading.Event()
         self.t_started, self.out_path = 0, None
+        self.pauses, self.files = [], []  # паузы [начало, конец]; файлы записи [(с какого момента, путь)]
 
         def on_record_state_changed(d):
             stamp = time.perf_counter_ns()  # штамп первым делом: от него отсчитывается t0 лога
-            if d.output_state == "OBS_WEBSOCKET_OUTPUT_STARTED":
+            s = d.output_state
+            if s == "OBS_WEBSOCKET_OUTPUT_STARTED":
                 self.t_started = stamp
+                self.files = [(stamp, getattr(d, "output_path", None))]
                 self.started.set()
-            elif d.output_state == "OBS_WEBSOCKET_OUTPUT_STOPPED":
+            elif s == "OBS_WEBSOCKET_OUTPUT_PAUSED":
+                self.pauses.append([stamp, None])
+            elif s == "OBS_WEBSOCKET_OUTPUT_RESUMED" and self.pauses:
+                self.pauses[-1][1] = stamp
+            elif s == "OBS_WEBSOCKET_OUTPUT_STOPPED":
                 self.out_path = d.output_path
                 self.stopped.set()
 
-        self.ev.callback.register(on_record_state_changed)
+        def on_record_file_changed(d):  # OBS разбивает запись на файлы (websocket 5.5+): дальше пишет в новый
+            self.files.append((time.perf_counter_ns(), d.new_output_path))
+
+        self.ev.callback.register([on_record_state_changed, on_record_file_changed])
 
     def prepare(self, c):
         v = self.req.get_version()
@@ -189,7 +199,7 @@ class Obs:
             raise RuntimeError(t("в OBS уже идёт запись — остановите её"))
         self.started.clear()
         self.stopped.clear()
-        self.out_path = None
+        self.out_path, self.pauses, self.files = None, [], []
         self.req.start_record()
         if not self.started.wait(10):
             raise RuntimeError(t("OBS не подтвердил старт записи за 10 с"))
@@ -282,19 +292,36 @@ class Recorder:
         log.info(t("● Запись идёт"))
 
     def stop(self):
-        """Останавливает запись и сохраняет лог. Возвращает (видео или None, лог)."""
+        """Останавливает запись и кладёт лог курсора рядом с каждым её файлом (OBS может разбивать запись).
+        Возвращает [(видео или None, лог)]."""
         (logger, t0), self.rec = self.rec, None
         try:
             video = self.obs.stop()
-            log_path = video.with_suffix(".cursor.json")
         except Exception as e:
             log.error(t("Не удалось остановить запись в OBS: %s"), e)
-            video, log_path = None, Path(f"cursor_{time.strftime('%Y%m%d_%H%M%S')}.cursor.json").resolve()
+            video = None
         finally:
             logger.stop()
-        log_path.write_text(json.dumps(logger.to_dict(t0), separators=(",", ":")), encoding="utf-8")
-        log.info(t("■ Запись остановлена: %s"), video)
-        return video, log_path
+        if video:
+            files = self.obs.files or [(t0, None)]
+            files[-1] = (files[-1][0], video)  # последний файл точно называет событие остановки
+        else:  # лог не теряем: в папку записей (текущая папка у установленной программы — её собственная)
+            folder = Path(self.cfg["ui"]["folder"] or Path.home() / "Videos")
+            folder.mkdir(parents=True, exist_ok=True)
+            files = [(t0, folder / f"cursor_{time.strftime('%Y%m%d_%H%M%S')}.cursor.json")]
+        out = []
+        for i, (begin, path) in enumerate(files):
+            if not path:
+                log.warning(t("OBS не сообщил имя файла записи — лог для него не сохранён"))
+                continue
+            path = Path(path)
+            log_path = path if path.name.endswith(".cursor.json") else path.with_suffix(".cursor.json")
+            end = files[i + 1][0] if i + 1 < len(files) else None
+            log_path.write_text(json.dumps(logger.to_dict(begin, self.obs.pauses, end), separators=(",", ":")),
+                                encoding="utf-8")
+            out.append((path if video else None, log_path))
+            log.info(t("■ Запись остановлена: %s"), path if video else None)
+        return out
 
     def close(self):
         for client in (self.obs.ev, self.obs.req):
@@ -332,8 +359,9 @@ def record_loop(cfg):
             try:
                 if not r.recording:
                     r.start()
-                elif (res := r.stop())[0]:
-                    threading.Thread(target=render_bg, args=res).start()
+                else:
+                    parts = [p for p in r.stop() if p[0]]
+                    threading.Thread(target=lambda: [render_bg(*p) for p in parts]).start()
             except Exception as e:
                 log.error("Ошибка: %s", e)
     except KeyboardInterrupt:

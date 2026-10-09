@@ -168,11 +168,33 @@ class CursorLogger:
             else:
                 nxt = time.perf_counter_ns()  # отстали — не догоняем пачкой
 
-    def to_dict(self, t0_ns):
-        ms = lambda t: round((t - t0_ns) / 1e6, 3)
+    def to_dict(self, t0_ns, pauses=(), end_ns=None):
+        """Лог для файла записи, начатого в t0_ns (и законченного в end_ns, если OBS разбил запись на файлы).
+        pauses — [[начало, конец или None]] пауз записи, ns: на видео их нет, поэтому сэмплы из пауз выкидываем,
+        а время после паузы сдвигаем на её длину."""
+        pauses = [(a, b) for a, b in pauses if a >= t0_ns and (end_ns is None or a < end_ns)]
+
+        def at(t):
+            """(мс на видео, попал ли момент в паузу); момент внутри паузы — её начало, то есть склейка."""
+            shift = 0
+            for a, b in pauses:
+                if t < a:
+                    break
+                if b is None or t < b:
+                    return round((a - t0_ns - shift) / 1e6, 3), True
+                shift += b - a
+            return round((t - t0_ns - shift) / 1e6, 3), False
+
+        lo, hi = t0_ns - 1e9, (end_ns or float("inf")) + 1e9  # с запасом в секунду по краям файла
+        samples, clicks = [], []
+        for t, x, y, k, v in self.samples:
+            if lo <= t <= hi and not (m := at(t))[1]:
+                samples.append([m[0], x, y, k, v])
+        for t, b, d, x, y in self.clicks:
+            if lo <= t <= hi and not ((m := at(t))[1] and d):  # нажатие в паузе на видео не попало, отпускание — на склейке
+                clicks.append([m[0], b, d, x, y])
         return {"version": 1, "display": self.display, "hz": round(1e9 / self.period), "types": TYPES,
-                "samples": [[ms(t), x, y, k, v] for t, x, y, k, v in self.samples],
-                "clicks": [[ms(t), b, d, x, y] for t, b, d, x, y in self.clicks]}
+                "samples": samples, "clicks": clicks}
 
 
 def cursor_base_size():

@@ -29,6 +29,8 @@ EN = {
     "OBS настроен: сцена «%s», %s %dx%d @ %d fps": "OBS is set up: scene “%s”, %s %dx%d @ %d fps",
     "Не удалось остановить запись в OBS: %s": "Could not stop the recording in OBS: %s",
     "■ Запись остановлена: %s": "■ Recording stopped: %s",
+    "OBS не сообщил имя файла записи — лог для него не сохранён":
+        "OBS did not report the recording file name — no cursor log was saved for it",
     "не нашёл исходное видео «{}» ({}) в {}": "source video “{}” ({}) not found in {}",
     "не нашёл лог курсора {}": "cursor log not found: {}",
     "Не могу выбрать дисплей: {}. Мониторы:\n{}": "Can't pick a display: {}. Monitors:\n{}",
@@ -50,6 +52,7 @@ EN = {
     "{}–{} с": "{}–{} s",
     "%s %s: %dx%d @ %.3g fps, %s, offset %g мс, кодек %s": "%s %s: %dx%d @ %.3g fps, %s, offset %g ms, codec %s",
     "рендер отменён": "render cancelled",
+    "{} открыт в другой программе — новый рендер сохранён как {}": "{} is open in another app — the new render was saved as {}",
     "ffmpeg завершился с кодом {}:\n{}": "ffmpeg exited with code {}:\n{}",
     "Готово: %s — %dx%d @ %.3g fps, %.2f с": "Done: %s — %dx%d @ %.3g fps, %.2f s",
     "Параметры результата не совпадают с исходником (%.2f с)!": "The result does not match the source (%.2f s)!",
@@ -66,10 +69,10 @@ EN.update({
     "дрожание, показывает клики и шлейф движения. Настройка займёт минуту.":
         "Smooth Cursor records your screen with OBS and makes the cursor in the video smooth, like Screen Studio: it "
         "removes jitter and shows clicks and a motion trail. Setup takes about a minute.",
-    "1. Установите и откройте OBS Studio (версия 28 или новее).\n2. В OBS: Сервис → Настройки сервера WebSocket.\n"
+    "1. Установите и откройте OBS Studio (версия 30 или новее).\n2. В OBS: Сервис → Настройки сервера WebSocket.\n"
     "3. Включите «Включить сервер WebSocket». Если включена аутентификация — нажмите «Показать данные для "
     "подключения» и перенесите пароль сюда.":
-        "1. Install and open OBS Studio (version 28 or newer).\n2. In OBS: Tools → WebSocket Server Settings.\n"
+        "1. Install and open OBS Studio (version 30 or newer).\n2. In OBS: Tools → WebSocket Server Settings.\n"
         "3. Turn on “Enable WebSocket server”. If authentication is on, click “Show Connect Info” and copy the "
         "password here.",
     "Скачать OBS": "Download OBS", "Проверить подключение": "Test connection", "Подключаюсь…": "Connecting…",
@@ -108,7 +111,7 @@ EN.update({
         "Record as usual — the cursor in the video becomes smooth by itself. On the right is a live preview of how "
         "the cursor will look with the current settings.",
     "Рендерить сразу после записи": "Render right after recording", "СЕЙЧАС В OBS": "NOW IN OBS",
-    "Обновить": "Refresh", "РЕНДЕР": "RENDER", "Отменить": "Cancel", "ЖУРНАЛ": "LOG", "Весь журнал": "Full log",
+    "Проверить": "Refresh", "РЕНДЕР": "RENDER", "Отменить": "Cancel", "ЖУРНАЛ": "LOG", "Весь журнал": "Full log",
     "журнал": "log", "нет задач": "idle", "в очереди: {}": "queued: {}", "превью": "preview", "рендер": "render",
     "Превью не удалось": "Preview failed", "Рендер не удался": "Render failed",
     "ЖИВОЕ ПРЕВЬЮ": "LIVE PREVIEW", "двигайте мышью и кликайте": "move the mouse and click",
@@ -135,7 +138,8 @@ EN.update({
     "Папка записей: %s — OBS переключится на неё при подключении":
         "Recordings folder: %s — OBS will switch to it when connected",
     "OBS теперь сохраняет записи в %s": "OBS now saves recordings to %s",
-    "Не удалось сменить папку записей в OBS: %s": "Could not change the OBS recordings folder: %s",
+    "Не удалось сменить папку записей в OBS (нужен OBS 30 или новее): %s":
+        "Could not change the OBS recordings folder (OBS 30 or newer is needed): %s",
     # --- движение ---
     "Метод сглаживания": "Smoothing method", "Пружина": "Spring", "Жёсткость": "Stiffness", "Демпфирование": "Damping",
     "задержка ≈ {} мс. Меньше — плавнее и медленнее, больше — быстрее догоняет руку.":
@@ -182,7 +186,7 @@ EN.update({
     # --- вывод ---
     "Кодирование": "Encoding", "Кодек": "Codec", "Авто": "Auto", "Процессор": "CPU", "Пресет": "Preset",
     "Качество (CQ)": "Quality (CQ)",
-    "Меньше — лучше и тяжелее файл; 18 — почти без потерь. Кодирует видеокарта (NVENC).":
+    "Меньше — лучше и тяжелее файл; 18 — почти без потерь.":
         "Lower is better quality and bigger files; 18 is nearly lossless.",
     "Синхронизация с видео": "Sync with video", "Сдвиг · 30 fps": "Offset · 30 fps", "Сдвиг · 60 fps": "Offset · 60 fps",
     "Другой fps": "Other fps",
