@@ -143,6 +143,17 @@ EN.update({
     "1 — без перелёта. Меньше — курсор слегка проскакивает цель, больше — вязко.":
         "1 means no overshoot. Lower makes the cursor overshoot slightly, higher feels sluggish.",
     "Мягко и «дорого», как в Screen Studio.": "Soft and “premium”, like Screen Studio.",
+    "Обновление": "Update", "Вышла\nверсия {}.": "Version {}\nis out.", "Обновить": "Update",
+    "Не сейчас": "Not now", "Скачиваю…": "Downloading…", "Ещё раз": "Retry",
+    "Программа закроется и через пару секунд откроется уже обновлённой. Настройки и записи останутся на месте.":
+        "The app will close and reopen updated in a couple of seconds. Your settings and recordings stay as they are.",
+    "Обновление пропущено. Скачать можно здесь: %s": "Update skipped. You can download it here: %s",
+    "Скачиваю обновление %s…": "Downloading update %s…",
+    "Не удалось обновиться: %s": "Update failed: %s",
+    "файл обновления повреждён (не совпала контрольная сумма)": "the update file is corrupted (checksum mismatch)",
+    "Пресет": "Preset", "Стандарт": "Standard", "Лёгкий": "Light", "Кино": "Cinematic", "Без эффектов": "No effects",
+    "свой": "custom", "Меняет сглаживание и эффекты.\nДальше можно подстроить ползунками.":
+        "Sets smoothing and effects.\nFine-tune with the sliders afterwards.",
     "Почти без задержки, сглаживает в основном медленные движения.": "Almost no delay, smooths mostly slow movements.",
     "Мин. частота": "Min. cutoff", "Гц. Меньше — сильнее сглаживаются медленные движения.":
         "Hz. Lower smooths slow movements more.",

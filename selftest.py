@@ -126,7 +126,20 @@ def check_render():
         assert (tmp / "src_cursor.csv").read_text(encoding="utf-8").count("\n") == src["frames"] + 1
 
 
+def check_presets():
+    import copy
+    cfg = copy.deepcopy(settings.DEFAULTS)
+    assert settings.preset_of(cfg) == "standard", "настройки по умолчанию = пресет «Стандарт»"
+    for name in settings.PRESETS:
+        settings.apply_preset(cfg, name)
+        assert settings.preset_of(cfg) == name, name
+    cfg["smoothing"]["stiffness"] += 10
+    assert settings.preset_of(cfg) is None, "после ручной правки пресет не подсвечен"
+    print("пресеты: ок")
+
+
 if __name__ == "__main__":
+    check_presets()
     check_smoothing()
     check_click_animation()
     check_obs_transform()

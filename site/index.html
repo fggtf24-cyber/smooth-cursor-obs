@@ -1,0 +1,453 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Smooth Cursor для OBS</title>
+<meta name="description" content="Плавный курсор на записях экрана из OBS, как в Screen Studio. Бесплатно, для Windows.">
+<meta property="og:title" content="Smooth Cursor для OBS">
+<meta property="og:description" content="Записывайте как обычно — курсор на видео станет плавным сам.">
+<meta property="og:image" content="demo.jpg">
+<link rel="icon" href="icon.png">
+<style>
+@font-face { font-family: Inter; src: url(Inter-Regular.ttf); font-weight: 400; font-display: swap; }
+@font-face { font-family: Inter; src: url(Inter-Medium.ttf); font-weight: 500; font-display: swap; }
+@font-face { font-family: "IBM Plex Mono"; src: url(IBMPlexMono-Regular.ttf); font-display: swap; }
+:root {
+  --bg: #E6E6E6; --field: #EEEEEE; --hover: #D6D6D6; --panel: #1C1C1C;
+  --line: #BDBDBD; --rule: #D0D0D0; --mute: #8A8A8A; --ink2: #3A3A3A; --ink: #1C1C1C; --blue: #2632E8;
+  --sans: Inter, Arial, sans-serif; --mono: "IBM Plex Mono", Consolas, monospace;
+}
+* { box-sizing: border-box; margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 400 16px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+a { color: inherit; }
+.wrap { max-width: 1320px; margin: 0 auto; padding: 0 32px; }
+.caps { font: 500 12px/1 var(--sans); letter-spacing: .08em; text-transform: uppercase; }
+.mono { font-family: var(--mono); }
+.mute { color: var(--mute); }
+hr { border: 0; border-top: 1px solid var(--rule); }
+
+header { display: flex; align-items: center; gap: 24px; height: 72px; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 500; text-decoration: none; }
+.brand img { width: 28px; height: 28px; image-rendering: pixelated; }
+header nav { margin-left: auto; display: flex; align-items: center; gap: 24px; font-size: 14px; }
+header nav a { text-decoration: none; color: var(--ink2); }
+header nav a:hover { color: var(--ink); text-decoration: underline; }
+.seg { display: flex; }
+.seg button { font: 500 13px var(--sans); height: 28px; padding: 0 12px; border: 1px solid var(--line); background: var(--bg);
+  color: var(--ink); cursor: pointer; border-radius: 0; }
+.seg button + button { border-left: 0; }
+.seg button:hover { background: var(--hover); }
+.seg button[aria-pressed=true] { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+
+.hero { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 48px; align-items: start; padding: 40px 0 64px; }
+h1 { font: 400 clamp(64px, 9vw, 128px)/.9 var(--sans); letter-spacing: -.045em; margin-left: -.05em; }
+.lead { font-size: 18px; color: var(--ink2); max-width: 30em; margin: 28px 0 32px; }
+.dl { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+.btn { display: inline-flex; align-items: center; gap: 12px; height: 56px; padding: 0 32px; background: var(--ink); color: var(--bg);
+  font: 500 17px var(--sans); text-decoration: none; border: 1px solid var(--ink); }
+.btn:hover { background: var(--ink2); }
+.btn:focus-visible, .seg button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.btn svg { width: 16px; height: 16px; }
+.btn.outline { background: var(--bg); color: var(--ink); }
+.btn.outline:hover { background: var(--hover); }
+.cta-btns { display: flex; gap: 12px; flex-wrap: wrap; }
+.meta { font: 13px/1.6 var(--mono); color: var(--mute); }
+.req { margin-top: 18px; font-size: 14px; color: var(--ink2); }
+
+#live { width: 100%; aspect-ratio: 726 / 360; display: block; touch-action: pan-y; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 22px; margin-top: 10px; font-size: 13px; color: var(--ink2); }
+.legend i { display: inline-block; width: 12px; height: 12px; margin-right: 6px; vertical-align: -1px; }
+
+section { padding: 56px 0; }
+.sh { display: flex; align-items: baseline; gap: 16px; margin-bottom: 28px; }
+h2 { font: 400 clamp(36px, 4.5vw, 56px)/1 var(--sans); letter-spacing: -.035em; }
+.demo { display: grid; grid-template-columns: minmax(0, 540px) minmax(0, 1fr); gap: 48px; align-items: start; }
+.demo video { width: 100%; max-width: 540px; height: auto; display: block; background: var(--panel); }
+.points { display: grid; gap: 0; }
+.points div { padding: 18px 0; border-top: 1px solid var(--rule); }
+.points div:last-child { border-bottom: 1px solid var(--rule); }
+.points b { font-weight: 500; display: block; margin-bottom: 4px; }
+.points p { color: var(--ink2); font-size: 15px; }
+
+.steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 32px; }
+.step .n { font: 400 64px/1 var(--sans); letter-spacing: -.04em; padding: 14px 16px 18px; background: var(--panel); color: var(--bg);
+  width: fit-content; min-width: 120px; margin-bottom: 18px; }
+.step b { font-weight: 500; display: block; margin-bottom: 6px; font-size: 17px; }
+.step p { color: var(--ink2); font-size: 15px; }
+.bug { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 48px; }
+.bug p { color: var(--ink2); margin-top: 16px; max-width: 26em; }
+.bug form { display: grid; gap: 16px; }
+.bug label { display: grid; gap: 8px; }
+.bug textarea, .bug input { font: 15px/1.5 var(--sans); color: var(--ink); background: var(--field); border: 1px solid var(--line);
+  border-radius: 0; padding: 10px 12px; width: 100%; }
+.bug textarea { min-height: 150px; resize: vertical; }
+.bug textarea:focus, .bug input:focus { outline: none; border-color: var(--ink); }
+.bug .hp { position: absolute; left: -9999px; }
+.bug .row { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+.bug button.btn { cursor: pointer; }
+.bug button.btn:disabled { background: var(--line); border-color: var(--line); cursor: default; }
+#bug-status { font-size: 14px; }
+#bug-status.err { color: #D0342C; }
+kbd { font: 13px var(--mono); border: 1px solid var(--line); background: var(--field); padding: 1px 6px; }
+
+.cta { display: flex; align-items: center; justify-content: space-between; gap: 32px; flex-wrap: wrap; padding: 48px 0; }
+footer { padding: 18px 0 40px; display: flex; gap: 24px; flex-wrap: wrap; font-size: 13px; color: var(--mute); }
+footer a { color: var(--ink2); }
+
+@media (max-width: 960px) {
+  .hero, .demo { grid-template-columns: minmax(0, 1fr); }
+  .steps, .bug { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 600px) {
+  .wrap { padding: 0 16px; }
+  header nav a { display: none; }
+  .hero { padding-top: 24px; gap: 36px; }
+  .btn { width: 100%; justify-content: center; }
+  #live { aspect-ratio: 1 / 1; }
+}
+@media (prefers-reduced-motion: reduce) { .demo video { display: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <a class="brand" href="./"><img src="icon.png" alt="">Smooth Cursor</a>
+    <nav>
+      <a href="#demo" data-t="nav_demo">Как выглядит</a>
+      <a href="#how" data-t="nav_how">Как работает</a>
+      <a href="https://github.com/fggtf24-cyber/smooth-cursor-obs">GitHub</a>
+      <a href="https://www.donationalerts.com/r/n3ba0" target="_blank" rel="noopener" data-t="donate">Поддержать</a>
+      <div class="seg" role="group" aria-label="Language">
+        <button type="button" data-lang="ru">RU</button><button type="button" data-lang="en">EN</button>
+      </div>
+    </nav>
+  </header>
+  <hr>
+
+  <main>
+    <div class="hero">
+      <div>
+        <h1>Smooth<br>cursor.</h1>
+        <p class="lead" data-t="lead">Записывайте экран в OBS как обычно — курсор на видео станет плавным сам. Как в Screen Studio, только бесплатно.</p>
+        <div class="dl">
+          <a class="btn dl-link" href="https://github.com/fggtf24-cyber/smooth-cursor-obs/releases/latest/download/SmoothCursor-Setup.exe">
+            <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M7 1h2v8.6l3-3 1.4 1.4L8 13.4 2.6 8 4 6.6l3 3z"/><path d="M1 14h14v2H1z"/></svg>
+            <span data-t="download">Скачать для Windows</span>
+          </a>
+          <span class="meta"><span class="ver">v1.0.3</span> · <span class="size">45</span> <span data-t="mb">МБ</span></span>
+        </div>
+        <p class="req" data-t="req">Windows 10/11 · OBS Studio 28+ · без прав администратора</p>
+      </div>
+      <div>
+        <canvas id="live" aria-label="Живое превью курсора"></canvas>
+        <div class="legend">
+          <span><i style="background:#6A6A6A"></i><span data-t="lg_hand">как двигалась рука</span></span>
+          <span><i style="background:var(--blue)"></i><span data-t="lg_cursor">курсор на видео</span></span>
+        </div>
+      </div>
+    </div>
+    <hr>
+
+    <section id="demo">
+      <div class="demo">
+        <div>
+          <div class="seg" role="group" aria-label="Demo" style="margin-bottom:12px">
+            <button type="button" data-video="demo-zoom" aria-pressed="true" data-t="v_zoom">Крупно</button><button type="button" data-video="demo" aria-pressed="false" data-t="v_full">Весь экран</button>
+          </div>
+          <video id="demo-video" src="demo-zoom.mp4" poster="demo-zoom.jpg" width="540" height="608" autoplay muted loop playsinline></video>
+        </div>
+        <div>
+          <div class="sh"><span class="caps mute" data-t="before_after">До и после</span></div>
+          <h2 data-t="demo_h" style="margin-bottom:28px">Рука дрожит.<br>Курсор — нет.</h2>
+          <div class="points">
+            <div><b data-t="p1">Плавная траектория</b><p data-t="p1d">Дёрганые движения сглаживаются пружиной, мелкое дрожание гасится.</p></div>
+            <div><b data-t="p2">Клики точно в цель</b><p data-t="p2d">Курсор приходит ровно в точку клика, при нажатии чуть сжимается и наклоняется.</p></div>
+            <div><b data-t="p3">Motion blur</b><p data-t="p3d">На быстрых движениях — шлейф, как у настоящей камеры.</p></div>
+            <div><b data-t="p4">Можно перерендерить</b><p data-t="p4d">Лог курсора сохраняется рядом с видео — настройки можно поменять потом.</p></div>
+          </div>
+        </div>
+      </div>
+    </section>
+    <hr>
+
+    <section id="how">
+      <div class="sh"><h2 data-t="how_h">Как работает</h2></div>
+      <div class="steps">
+        <div class="step"><div class="n">01</div><b data-t="s1">Установите</b><p data-t="s1d">Один установщик, Python не нужен. Ярлыки в «Пуске» и на рабочем столе.</p></div>
+        <div class="step"><div class="n">02</div><b data-t="s2">Подключите OBS</b><p data-t="s2d">Мастер сам создаст в OBS сцену с захватом экрана без курсора и при необходимости скачает ffmpeg.</p></div>
+        <div class="step"><div class="n">03</div><b data-t="s3">Нажмите F9</b><p data-t="s3d">OBS пишет, программа логирует курсор 240 раз в секунду. Ещё раз <kbd>F9</kbd> — рядом появится <kbd>_smooth.mp4</kbd>.</p></div>
+      </div>
+    </section>
+    <hr>
+
+    <div class="cta">
+      <h2 data-t="cta">Попробуйте.</h2>
+      <div class="cta-btns">
+      <a class="btn dl-link" href="https://github.com/fggtf24-cyber/smooth-cursor-obs/releases/latest/download/SmoothCursor-Setup.exe">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M7 1h2v8.6l3-3 1.4 1.4L8 13.4 2.6 8 4 6.6l3 3z"/><path d="M1 14h14v2H1z"/></svg>
+        <span data-t="download">Скачать для Windows</span>
+      </a>
+      <a class="btn outline" href="https://www.donationalerts.com/r/n3ba0" target="_blank" rel="noopener">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1 4h2V2h4v2h2V2h4v2h2v4h-2v2h-2v2h-2v2H7v-2H5v-2H3V8H1z"/></svg>
+        <span data-t="donate_long">Поддержать проект</span>
+      </a>
+      </div>
+    </div>
+    <hr>
+
+    <section id="bug">
+      <div class="bug">
+        <div>
+          <h2 data-t="bug_h">Баг или идея?</h2>
+          <p data-t="bug_d">Нашли ошибку — опишите, что делали и что пошло не так. Не хватает какой-то функции — тоже пишите, пожелания читаю все. Оставьте почту, если хотите ответ.</p>
+        </div>
+        <form id="bug-form" action="send.php" method="post">
+          <label><span class="caps" data-t="bug_msg">Сообщение</span>
+            <textarea name="message" required minlength="10" maxlength="5000"></textarea></label>
+          <label><span class="caps" data-t="bug_mail">Почта для ответа — необязательно</span>
+            <input type="email" name="email" autocomplete="email" maxlength="200"></label>
+          <input class="hp" type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">
+          <div class="row">
+            <button class="btn" type="submit" data-t="bug_send">Отправить</button>
+            <span id="bug-status" role="status"></span>
+          </div>
+        </form>
+      </div>
+    </section>
+  </main>
+  <hr>
+  <footer>
+    <span>Smooth Cursor · MIT</span>
+    <a href="https://github.com/fggtf24-cyber/smooth-cursor-obs" data-t="source">Исходный код</a>
+    <a href="https://github.com/fggtf24-cyber/smooth-cursor-obs/releases" data-t="all_rel">Все версии</a>
+    <a href="#bug" data-t="bug_link">Баг или идея</a>
+    <a href="https://www.donationalerts.com/r/n3ba0" target="_blank" rel="noopener" data-t="donate">Поддержать</a>
+  </footer>
+</div>
+
+<script>
+// ---------- язык ----------
+const EN = {
+  title: "Smooth Cursor for OBS", nav_demo: "Demo", nav_how: "How it works",
+  lead: "Record your screen in OBS as usual — the cursor in the video becomes smooth on its own. Like Screen Studio, but free.",
+  download: "Download for Windows", mb: "MB", req: "Windows 10/11 · OBS Studio 28+ · no admin rights needed",
+  lg_hand: "how the hand moved", lg_cursor: "cursor in the video", before_after: "Before and after",
+  demo_h: "Your hand shakes.<br>The cursor doesn’t.",
+  p1: "Smooth path", p1d: "Jerky movements are smoothed by a spring, small jitter is suppressed.",
+  p2: "Clicks land on target", p2d: "The cursor arrives exactly at the click point and squeezes and tilts slightly on press.",
+  p3: "Motion blur", p3d: "Fast moves get a trail, like a real camera shutter.",
+  p4: "Re-render any time", p4d: "The cursor log is saved next to the video — change the settings later.",
+  how_h: "How it works",
+  s1: "Install", s1d: "One installer, no Python needed. Shortcuts in Start and on the desktop.",
+  s2: "Connect OBS", s2d: "The wizard creates an OBS scene with cursor-less screen capture and downloads ffmpeg if needed.",
+  s3: "Press F9", s3d: "OBS records, the app logs the cursor 240 times a second. Press <kbd>F9</kbd> again — a <kbd>_smooth.mp4</kbd> appears next to it.",
+  cta: "Give it a try.", v_zoom: "Zoomed in", v_full: "Full screen", bug_h: "Bug or idea?", bug_d: "Found a bug — describe what you did and what went wrong. Missing a feature — write too, I read every request. Leave your email if you want a reply.",
+  bug_msg: "Message", bug_mail: "Email for a reply — optional", bug_send: "Send", bug_link: "Bug or idea",
+  st_sending: "Sending…", st_ok: "Sent. Thank you!", st_length: "Please write at least 10 characters.", st_email: "Check the email address.",
+  st_often: "Too often — try again in a minute.", st_send: "Could not send. Please try again later.", donate: "Donate", donate_long: "Support the project", source: "Source code", all_rel: "All versions",
+  live: "LIVE PREVIEW", live_hint: "move the mouse and click", live_hint_touch: "touch and drag",
+};
+const RU = {};
+document.querySelectorAll("[data-t]").forEach(el => RU[el.dataset.t] = el.innerHTML);
+Object.assign(RU, { st_sending: "Отправляю…", st_ok: "Отправлено. Спасибо!", st_length: "Напишите хотя бы 10 символов.",
+  st_email: "Проверьте адрес почты.", st_often: "Слишком часто — попробуйте через минуту.", st_send: "Не получилось отправить. Попробуйте позже.",
+  title: document.title, live: "ЖИВОЕ ПРЕВЬЮ", live_hint: "двигайте мышью и кликайте", live_hint_touch: "проведите пальцем" });
+let L = RU;
+function setLang(lang) {
+  L = lang === "en" ? EN : RU;
+  document.documentElement.lang = lang;
+  document.title = L.title;
+  document.querySelectorAll("[data-t]").forEach(el => el.innerHTML = L[el.dataset.t]);
+  document.querySelectorAll("[data-lang]").forEach(b => b.setAttribute("aria-pressed", b.dataset.lang === lang));
+  try { localStorage.setItem("lang", lang); } catch {}
+}
+document.querySelectorAll("[data-lang]").forEach(b => b.onclick = () => setLang(b.dataset.lang));
+let saved = null;
+try { saved = localStorage.getItem("lang"); } catch {}
+setLang(saved || (/^(ru|uk|be|kk)/i.test(navigator.language) ? "ru" : "en"));
+
+// ---------- демо: крупно / весь экран ----------
+const demoVideo = document.getElementById("demo-video");
+document.querySelectorAll("[data-video]").forEach(b => b.onclick = () => {
+  document.querySelectorAll("[data-video]").forEach(o => o.setAttribute("aria-pressed", o === b));
+  demoVideo.poster = b.dataset.video + ".jpg";
+  demoVideo.src = b.dataset.video + ".mp4";
+  demoVideo.play().catch(() => {});
+});
+
+// ---------- баг-репорт ----------
+const bugForm = document.getElementById("bug-form"), bugStatus = document.getElementById("bug-status");
+const bugMsg = (key, err) => { bugStatus.textContent = L[key]; bugStatus.className = err ? "err" : ""; };
+bugForm.onsubmit = async e => {
+  e.preventDefault();
+  const btn = bugForm.querySelector("button");
+  btn.disabled = true; bugMsg("st_sending");
+  try {
+    const r = await fetch("send.php", { method: "POST", body: new FormData(bugForm), headers: { Accept: "application/json" } });
+    const j = await r.json();
+    if (j.ok) { bugForm.reset(); bugMsg("st_ok"); } else bugMsg("st_" + (L["st_" + j.error] ? j.error : "send"), true);
+  } catch { bugMsg("st_send", true); }
+  btn.disabled = false;
+};
+const sent = new URLSearchParams(location.search).get("sent");  // возврат после отправки без JS
+if (sent) bugMsg(sent === "1" ? "st_ok" : "st_send", sent !== "1");
+
+// ---------- версия и размер из последнего релиза (без сети — остаётся то, что в разметке) ----------
+fetch("https://api.github.com/repos/fggtf24-cyber/smooth-cursor-obs/releases/latest").then(r => r.ok && r.json()).then(r => {
+  const a = r && r.assets.find(a => a.name.endsWith(".exe"));
+  if (!a) return;
+  document.querySelectorAll(".ver").forEach(e => e.textContent = r.tag_name);
+  document.querySelectorAll(".size").forEach(e => e.textContent = Math.round(a.size / 1048576));
+}).catch(() => {});
+
+// ---------- живое превью: «рельеф» из Сапёра, внутри курсор со сглаживанием как в программе ----------
+const cv = document.getElementById("live"), ctx = cv.getContext("2d");
+const CELL = 22, FINE = 11, SHADES = ["#D9D9D9", "#B5B5B5", "#8F8F8F", "#6A6A6A", "#474747", "#2E2E2E"];
+const SM = { k: 400, zeta: 1, dead: 3 }, CLICK = { scale: .82, tilt: 15, ms: 320 };
+let W, H, core, terrainImg, dpr;
+
+function rng(seed) { return () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296; }
+function terrain(rows, cols, [r0, c0, r1, c1]) {  // порт LivePreview.terrain
+  const R = rng(5), at = (a, r, c) => a[((r + rows) % rows) * cols + (c + cols) % cols];
+  let n = Array.from({ length: rows * cols }, R);
+  for (let k = 0; k < 3; k++)
+    n = n.map((v, i) => { const r = i / cols | 0, c = i % cols; return (v + at(n, r - 1, c) + at(n, r + 1, c) + at(n, r, c - 1) + at(n, r, c + 1)) / 5; });
+  const mean = n.reduce((a, b) => a + b) / n.length, sd = Math.sqrt(n.reduce((a, b) => a + (b - mean) ** 2, 0) / n.length) + 1e-9;
+  return n.map((v, i) => {
+    const r = i / cols | 0, c = i % cols;
+    const d = Math.hypot(Math.max(c0 - c, c - c1, 0), Math.max(r0 - r, r - r1, 0));
+    let b = d < 1.4 + 1.8 * (v - mean) / sd;
+    if (R() < .12 && d > 0 && d < 3) b = false;
+    if (R() < .06 && d > 2.5 && d < 8) b = true;
+    return b || (r >= r0 && r <= r1 && c >= c0 && c <= c1);
+  });
+}
+
+function layout() {
+  dpr = window.devicePixelRatio || 1;
+  W = cv.clientWidth; H = cv.clientHeight;
+  cv.width = W * dpr; cv.height = H * dpr;
+  if (W < CELL * 8 || H < CELL * 8) return;  // ещё не выложен
+  const cols = Math.floor(W / CELL), rows = Math.floor(H / CELL), ox = (W - cols * CELL) / 2 | 0, oy = (H - rows * CELL) / 2 | 0;
+  const r0 = 2, r1 = rows - 3, c1 = cols - (W < 500 ? 3 : 4);
+  const c0 = W < 500 ? 2 : Math.max(2, c1 - Math.round((r1 - r0 + 1) * 16 / 9) + 1);  // на телефоне — во всю ширину
+  const black = terrain(rows, cols, [r0, c0, r1, c1]);
+  const off = document.createElement("canvas");
+  off.width = cv.width; off.height = cv.height;
+  const o = off.getContext("2d");
+  o.scale(dpr, dpr);
+  o.font = "11px 'IBM Plex Mono', Consolas, monospace"; o.textAlign = "center"; o.textBaseline = "middle";
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+    const x = ox + c * CELL, y = oy + r * CELL;
+    if (black[r * cols + c]) { o.fillStyle = "#1C1C1C"; o.fillRect(x, y, CELL - 1, CELL - 1); continue; }
+    let s = 0;
+    for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) {
+      const rr = r + i, cc = c + j;
+      if (rr >= 0 && rr < rows && cc >= 0 && cc < cols) s += black[rr * cols + cc];
+    }
+    if (s) { o.fillStyle = "#8A8A8A"; o.fillText(s, x + CELL / 2, y + CELL / 2 + 1); }
+  }
+  terrainImg = off;
+  core = [ox + c0 * CELL, oy + r0 * CELL, ox + (c1 + 1) * CELL - 1, oy + (r1 + 1) * CELL - 1];
+}
+
+// состояние: рука (сырой ввод в долях 0..1), курсор (сглаженный, в долях), след
+const S = { hand: [.35, .5], anchor: [.35, .5], p: [.35, .5], v: [0, 0], pix: new Map(), down: false, press: -1e9, release: -1e9, auto: true, lastInput: -1e9, touch: false };
+let last = performance.now();
+function input(e) {
+  const r = cv.getBoundingClientRect();
+  S.touch = e.pointerType === "touch";
+  // мышь по всему окну → в живую зону (как монитор в программе), палец — прямо по превью
+  S.hand = S.touch ? [(e.clientX - r.left - core[0]) / (core[2] - core[0]), (e.clientY - r.top - core[1]) / (core[3] - core[1])]
+                   : [e.clientX / innerWidth, e.clientY / innerHeight];
+  S.hand = S.hand.map(v => Math.min(1, Math.max(0, v)));
+  S.auto = false; S.lastInput = performance.now();
+}
+addEventListener("pointermove", input);
+addEventListener("pointerdown", e => { input(e); S.down = true; S.press = performance.now(); });
+addEventListener("pointerup", () => { if (S.down) { S.down = false; S.release = performance.now(); } });
+
+function clickCurve(age, dur, held) {  // порт render.click_curve
+  const attack = .25 * dur, release = .75 * dur, hold = Math.max(0, held - attack);
+  if (age < attack) return 1 - (1 - Math.min(1, Math.max(0, age / attack))) ** 3;
+  if (age < attack + hold) return 1;
+  const v = Math.min(1, Math.max(0, (age - attack - hold) / release));
+  return 1 - v * v * (3 - 2 * v);
+}
+
+function arrow(x, y, s, ang, alpha) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(-ang); ctx.scale(s, s); ctx.globalAlpha = alpha;
+  ctx.beginPath();
+  [[0, 0], [0, 17], [4, 13], [7, 20], [10, 19], [7, 12], [12, 12]].forEach(([a, b], i) => i ? ctx.lineTo(a, b) : ctx.moveTo(a, b));
+  ctx.closePath(); ctx.fillStyle = "#fff"; ctx.fill(); ctx.lineWidth = 1 / s; ctx.strokeStyle = "#000"; ctx.stroke();
+  ctx.restore();
+}
+
+const trail = [];
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (!core) return;
+  // без ввода 3 с — курсор сам рисует восьмёрку и кликает (и на телефоне без касаний)
+  if (now - S.lastInput > 3000) S.auto = true;
+  if (S.auto) {
+    const t = now / 1000;
+    S.hand = [.5 + .36 * Math.sin(t * .9) + .03 * Math.sin(t * 13), .5 + .3 * Math.sin(t * 1.8) + .03 * Math.cos(t * 11)];
+    const ph = t % 2.6;
+    if (ph < .2 && !S.down) { S.down = true; S.press = now; }
+    if (ph >= .2 && S.down) { S.down = false; S.release = now; }
+  }
+  const [x0, y0, x1, y1] = core, cw = x1 - x0, ch = y1 - y0;
+  const hx = S.hand[0] * cw, hy = S.hand[1] * ch;
+  if (Math.hypot(hx - S.anchor[0] * cw, hy - S.anchor[1] * ch) > SM.dead) S.anchor = [...S.hand];
+  const steps = Math.min(60, Math.max(1, Math.round(now - last)));
+  last = now;
+  for (let s = 0; s < steps; s++) for (const i of [0, 1]) {  // та же пружина, что при рендере, шаг 1 мс
+    const g = S.anchor[i] * (i ? ch : cw), p = S.p[i] * (i ? ch : cw);
+    S.v[i] += (SM.k * (g - p) - 2 * SM.zeta * Math.sqrt(SM.k) * S.v[i]) * .001;
+    S.p[i] = (p + S.v[i] * .001) / (i ? ch : cw);
+  }
+  S.pix.set(`${hx / FINE | 0},${hy / FINE | 0}`, now);
+  const qx = x0 + S.p[0] * cw, qy = y0 + S.p[1] * ch;
+  trail.push([now, qx, qy]);
+  while (trail.length > 45) trail.shift();
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  ctx.drawImage(terrainImg, 0, 0, W, H);
+  ctx.save(); ctx.beginPath(); ctx.rect(x0, y0, cw, ch); ctx.clip();
+  for (const [k, born] of S.pix) {  // пиксельный след руки, затухает за секунду
+    const age = (now - born) / 1000;
+    if (age > 1) { S.pix.delete(k); continue; }
+    const [i, j] = k.split(",").map(Number);
+    ctx.fillStyle = SHADES[Math.min(SHADES.length - 1, age * SHADES.length | 0)];
+    ctx.fillRect(x0 + i * FINE, y0 + j * FINE, FINE - 1, FINE - 1);
+  }
+  ctx.fillStyle = "#8A8A8A";
+  trail.forEach(([, tx, ty], i) => i % 3 || ctx.fillRect(tx - 1, ty - 1, 2, 2));
+  for (let i = 0; i < 9; i++) for (let j = 0; j < 9; j++) {  // синее пиксельное свечение
+    const a = Math.max(0, 1 - Math.hypot(i - 4, j - 4) / 4.6);
+    if (a) { ctx.fillStyle = `rgba(38,50,232,${(.92 * a ** 1.3).toFixed(3)})`; ctx.fillRect(qx + 8 - 36 + i * 8, qy + 10 - 36 + j * 8, 7, 7); }
+  }
+  const lvl = clickCurve(now - S.press, CLICK.ms, S.down ? Infinity : S.release - S.press);
+  if (lvl < .02) {  // motion blur: «призраки» по прошлым позициям
+    const n = 6;
+    for (let g = 0; g < n; g++) {
+      const tg = now - .5 / 30 * 1000 * (n - g) / n;
+      const pt = [...trail].reverse().find(p => p[0] <= tg);
+      if (pt && Math.abs(pt[1] - qx) + Math.abs(pt[2] - qy) > .5) arrow(pt[1], pt[2], 1.5, 0, .45 * (g + 1) / n);
+    }
+  }
+  arrow(qx, qy, 1.5 * (1 - (1 - CLICK.scale) * lvl), CLICK.tilt * lvl * Math.PI / 180, 1);
+  ctx.restore();
+  ctx.font = "500 11px Inter, Arial, sans-serif"; ctx.fillStyle = "#E6E6E6"; ctx.textBaseline = "top";
+  ctx.fillText(L.live, x0 + 10, y0 + 9);
+  ctx.font = "12px Inter, Arial, sans-serif"; ctx.fillStyle = "#8A8A8A";
+  ctx.fillText(matchMedia("(pointer: coarse)").matches ? L.live_hint_touch : L.live_hint, x0 + 10, y0 + 26);
+}
+new ResizeObserver(layout).observe(cv);
+document.fonts.ready.then(layout);
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

@@ -28,6 +28,7 @@ try:
     import i18n
     import render
     import settings
+    import updater
     from i18n import t
     from smooth_cursor import HotkeyThread, Recorder, parse_hotkey, rerender_paths
 except Exception:
@@ -484,6 +485,63 @@ class MonitorPicker(tk.Canvas):
                 self.on_pick(name)
 
 
+class UpdateCard(tk.Frame):
+    """Карточка поверх окна: вышла новая версия → «Обновить» (скачать с прогрессом) или «Не сейчас»."""
+    BAR = 24
+
+    def __init__(self, app, info, on_update, on_skip):
+        super().__init__(app.root, bg=BG, highlightthickness=1, highlightbackground=INK)
+        self.app = app
+        self.place(relx=0.5, rely=0.5, anchor="center")
+        self.lift()
+        p = tk.Frame(self, bg=BG)
+        p.pack(padx=40, pady=(30, 28))
+        top = tk.Frame(p, bg=BG)
+        top.pack(fill="x")
+        app.lbl(top, caps(t("Обновление")), "caps", INK).pack(side="left")
+        app.lbl(top, f"{updater.VERSION} → {info['version']}", "mono", INK2).pack(side="right")
+        head = tk.Canvas(p, width=520, height=112, bg=BG, highlightthickness=0)
+        for i, line in enumerate(t("Вышла\nверсия {}.").format(info["version"]).split("\n")):
+            head.create_text(-3, 14 + i * 48, anchor="nw", text=line, font=(F["head"][0], -46), fill=INK)
+        head.pack(anchor="w")
+        app.lbl(p, t("Программа закроется и через пару секунд откроется уже обновлённой. "
+                     "Настройки и записи останутся на месте."), "para", INK2, justify="left",
+                wraplength=520).pack(anchor="w", pady=(6, 18))
+        row = tk.Frame(p, bg=BG)
+        row.pack(fill="x", pady=(0, 18))
+        self.bar = tk.Canvas(row, width=self.BAR * 13, height=10, bg=BG, highlightthickness=0)
+        self.bar.pack(side="left")
+        self.status = app.lbl(row, "", "mono_s", MUTE)
+        self.status.pack(side="left", padx=(12, 0))
+        self.set_bar(0)
+        tk.Frame(p, height=1, bg=RULE).pack(fill="x", pady=(0, 16))
+        bot = tk.Frame(p, bg=BG)
+        bot.pack(fill="x")
+        self.go = Btn(bot, t("Обновить"), on_update, kind="primary")
+        self.go.pack(side="right")
+        self.skip = Btn(bot, t("Не сейчас"), on_skip)
+        self.skip.pack(side="right", padx=(0, 10))
+
+    def set_bar(self, pct, text=""):
+        self.bar.delete("all")
+        for i in range(self.BAR):
+            on = i < round(self.BAR * pct / 100)
+            self.bar.create_rectangle(i * 13, 0, i * 13 + 9, 9, fill=INK if on else BG, outline=INK if on else LINE)
+        if text:
+            self.status.config(text=text, fg=MUTE)
+
+    def busy(self):
+        self.go.set_enabled(False)
+        self.skip.set_enabled(False)
+        self.go.set_text(t("Скачиваю…"))
+
+    def failed(self, err):
+        self.status.config(text=err, fg=RED)
+        self.go.set_text(t("Ещё раз"))
+        self.go.set_enabled(True)
+        self.skip.set_enabled(True)
+
+
 class Onboarding(tk.Frame):
     """Первая настройка поверх окна: язык → подключение OBS → экран и fps → сохранение → готово."""
     STEPS = 5
@@ -805,6 +863,53 @@ class App:
         self.renderer.submit(self._detect_encoder)
         if not self.cfg["ui"]["onboarded"]:
             self.open_onboarding()
+        self.root.after(3000, lambda: threading.Thread(target=self._check_update, daemon=True).start())
+
+    # ---------- обновления ----------
+    def _check_update(self):
+        try:
+            info = updater.latest()
+        except Exception as e:  # нет интернета, лимит GitHub API — молча, проверим при следующем запуске
+            log.debug("update check: %s", e)
+            return
+        if info and info["version"] != self.cfg["ui"]["skip_version"]:
+            self.post(self.offer_update, info)
+
+    def offer_update(self, info):
+        if self.state == "recording" or self.pending or (self.onboarding and self.onboarding.winfo_exists()):
+            return self.root.after(60_000, self.offer_update, info)  # не мешаем записи и рендеру
+        card = None
+
+        def skip():
+            self.cfg["ui"]["skip_version"] = info["version"]  # про эту версию больше не спрашиваем
+            self.schedule_save()
+            card.destroy()
+            log.info(t("Обновление пропущено. Скачать можно здесь: %s"), updater.PAGE)
+
+        def update():
+            if not getattr(sys, "frozen", False):  # запуск из исходников — ставить нечего, открываем страницу
+                card.destroy()
+                return os.startfile(updater.PAGE)
+            card.busy()
+            log.info(t("Скачиваю обновление %s…"), info["version"])
+
+            def work():
+                try:
+                    mb = info["size"] / 2 ** 20
+                    path = updater.download(info, lambda p: self.post(
+                        card.set_bar, p, f"{p * mb / 100:.1f} / {mb:.1f} MB"))
+                    self.post(self.run_update, path)
+                except Exception as e:
+                    self.post(log.error, t("Не удалось обновиться: %s"), t(str(e)))
+                    self.post(card.failed, t(str(e)))
+
+            threading.Thread(target=work, daemon=True).start()
+
+        card = UpdateCard(self, info, update, skip)
+
+    def run_update(self, path):
+        subprocess.Popen([str(path), "--update"])  # установщик дождётся закрытия программы и запустит новую
+        self.on_close()
 
     def style(self):
         st = ttk.Style()
@@ -847,6 +952,7 @@ class App:
 
     def _saved(self):
         settings.save(self.cfg)
+        self.mark_preset()
         if hasattr(self, "strip"):
             self.strip.draw()
 
@@ -867,7 +973,10 @@ class App:
         self.lbl(brand, t("для записей OBS"), "brand").pack(anchor="w")
         self.lang_switch(top).pack(side="right", anchor="n", padx=(36, 0))
         Btn(top, t("Настройка"), self.open_onboarding, kind="primary", small=True).pack(side="right", anchor="n",
-                                                                                         padx=(30, 0))
+                                                                                         padx=(8, 0))
+        self.preset_btn = Btn(top, "", self.preset_menu, small=True)
+        self.preset_btn.pack(side="right", anchor="n", padx=(30, 0))
+        self.mark_preset()
         nav = tk.Frame(top, bg=BG)
         nav.pack(side="right", anchor="n")
         self.navs, tabs = {}, (("rec", t("Записи")), ("motion", t("Движение")), ("fx", t("Эффекты")),
@@ -971,7 +1080,11 @@ class App:
             return
         i18n.LANG = self.cfg["ui"]["lang"] = code
         self.schedule_save()
-        step = self.onboarding.step if self.onboarding and self.onboarding.winfo_exists() else None
+        self.rebuild()
+
+    def rebuild(self):
+        """Пересобрать окно целиком (язык, пресет) — с тем же журналом, кодировщиком и шагом онбординга."""
+        step =self.onboarding.step if self.onboarding and self.onboarding.winfo_exists() else None
         for w in self.root.winfo_children():
             w.destroy()
         self.log_win = None
@@ -1231,6 +1344,43 @@ class App:
         self.tree.pack(side="left", fill="both", expand=True, padx=(6, 0), pady=2)
         sb.pack(side="right", fill="y")
         self.tree.bind("<Double-1>", lambda e: self.open_selected(result=True))
+
+    PRESET_NAMES = {"standard": "Стандарт", "light": "Лёгкий", "cinema": "Кино", "clean": "Без эффектов"}
+
+    def mark_preset(self):
+        if hasattr(self, "preset_btn") and self.preset_btn.winfo_exists():
+            cur = settings.preset_of(self.cfg)
+            self.preset_btn.set_text(f"{t('Пресет')}: {t(self.PRESET_NAMES[cur]) if cur else t('свой')}  ▾")
+
+    def preset_menu(self):
+        """Выпадающий список пресетов под кнопкой — в стиле программы, закрывается кликом мимо или Esc."""
+        b, cur = self.preset_btn, settings.preset_of(self.cfg)
+        m = tk.Toplevel(self.root, bg=INK)
+        m.overrideredirect(True)
+        m.geometry(f"+{b.winfo_rootx()}+{b.winfo_rooty() + b.winfo_height() + 4}")
+        box = tk.Frame(m, bg=BG)
+        box.pack(padx=1, pady=1)
+        for name, label in self.PRESET_NAMES.items():
+            row = tk.Frame(box, bg=BG, cursor="hand2")
+            row.pack(fill="x")
+            mark = self.lbl(row, "■" if name == cur else "", "small", INK, width=2)
+            mark.pack(side="left", padx=(10, 0), pady=7)
+            lab = self.lbl(row, t(label), "body", INK, anchor="w", width=16)
+            lab.pack(side="left", padx=(2, 14))
+            for w in (row, mark, lab):
+                w.bind("<Enter>", lambda e, r=row: [x.config(bg=HOVER) for x in (r, *r.winfo_children())])
+                w.bind("<Leave>", lambda e, r=row: [x.config(bg=BG) for x in (r, *r.winfo_children())])
+                w.bind("<Button-1>", lambda e, n=name: (m.destroy(), self.pick_preset(n)))
+        self.lbl(box, t("Меняет сглаживание и эффекты.\nДальше можно подстроить ползунками."), "small", MUTE,
+                 justify="left").pack(anchor="w", padx=12, pady=(4, 10))
+        m.bind("<Escape>", lambda e: m.destroy())
+        m.bind("<FocusOut>", lambda e: m.destroy())
+        m.focus_force()
+
+    def pick_preset(self, name):
+        settings.apply_preset(self.cfg, name)
+        settings.save(self.cfg)
+        self.rebuild()  # ползунки показывают новые значения
 
     def tab_motion(self, p):
         l, r = self.columns(p)

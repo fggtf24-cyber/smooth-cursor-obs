@@ -1,12 +1,14 @@
 """Установщик Smooth Cursor: один exe, без прав администратора.
 Ставит программу в %LOCALAPPDATA%\\Programs\\Smooth Cursor, делает ярлыки в «Пуске» и на рабочем столе, запись
-в «Установка и удаление программ». С ключом --uninstall удаляет всё обратно (кроме настроек и записей)."""
+в «Установка и удаление программ». С ключом --uninstall удаляет всё обратно (кроме настроек и записей),
+с --update — тихо ставится поверх после закрытия программы (так обновляется сама программа)."""
 import ctypes
 import os
 import shutil
 import subprocess
 import sys
 import threading
+import time
 import tkinter as tk
 import winreg
 import zipfile
@@ -14,6 +16,8 @@ import zipfile
 import yaml
 from pathlib import Path
 from tkinter import font as tkfont
+
+from updater import VERSION
 
 APP = "Smooth Cursor"
 EXE = "Smooth Cursor.exe"
@@ -45,7 +49,8 @@ TXT = {
     "removed": ("Smooth Cursor удалён. Настройки и записи остались на месте.",
                 "Smooth Cursor was removed. Your settings and recordings were kept."),
     "running": ("Закройте Smooth Cursor и нажмите ещё раз.", "Close Smooth Cursor and try again."),
-    "head_i": ("Установка", "Install"), "head_u": ("Удаление", "Uninstall"),
+    "head_i": ("Установка", "Install"), "head_u": ("Удаление", "Uninstall"), "head_up": ("Обновление", "Updating"),
+    "waiting": ("Жду, пока закроется программа…", "Waiting for the app to close…"), "retry": ("Ещё раз", "Retry"),
 }
 
 
@@ -95,7 +100,7 @@ def install(desktop, progress):
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, UNINSTALL_KEY) as k:
         for name, value in (("DisplayName", APP), ("Publisher", APP), ("DisplayIcon", str(exe)),
                             ("InstallLocation", str(TARGET)), ("UninstallString", f'"{TARGET / "Uninstall.exe"}" --uninstall'),
-                            ("DisplayVersion", "1.0")):
+                            ("DisplayVersion", VERSION)):
             winreg.SetValueEx(k, name, 0, winreg.REG_SZ, value)
         winreg.SetValueEx(k, "EstimatedSize", 0, winreg.REG_DWORD, size_kb)
         winreg.SetValueEx(k, "NoModify", 0, winreg.REG_DWORD, 1)
@@ -263,9 +268,44 @@ class Window:
         self.btn.set_text("Continue")
         self.btn.command = self.main_step
 
+    def update_step(self):
+        """--update из программы: дождаться её закрытия, поставить поверх с теми же ярлыками и запустить снова."""
+        self.sub.config(text=tr("sub"))
+        self.head(tr("head_up") + "\nSmooth Cursor.")
+        self.status = self.lbl(self.body, tr("waiting"), "mono", MUTE, anchor="w", justify="left", wraplength=600)
+        self.status.pack(anchor="w")
+        self.bar.pack(side="left")
+        self.set_bar(0)
+        self.btn.set_text(tr("copying"))
+        self.btn.set_enabled(False)
+
+        def work():
+            try:
+                deadline = time.time() + 15  # программа закрывается сама; ждём до 15 с
+                while app_running():
+                    if time.time() > deadline:
+                        raise RuntimeError(tr("running"))
+                    time.sleep(0.25)
+                self.root.after(0, lambda: self.status.config(text=tr("copying"), fg=INK))
+                install((DESKTOP / f"{APP}.lnk").exists(), lambda p: self.root.after(0, self.set_bar, p))
+                subprocess.Popen([str(TARGET / EXE)], cwd=str(TARGET))
+                self.root.after(600, self.root.destroy)
+            except Exception as e:
+                self.root.after(0, self.update_failed, str(e))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def update_failed(self, err):
+        self.status.config(text=err, fg=RED)
+        self.btn.set_text(tr("retry"))
+        self.btn.command = self.main_step  # заново: ждать закрытия программы и ставить
+        self.btn.set_enabled(True)
+
     def main_step(self):
         for w in self.body.winfo_children():
             w.destroy()
+        if self.mode == "update":
+            return self.update_step()
         install = self.mode == "install"
         self.counter.config(text="02 / 02" if install else "")
         self.sub.config(text=tr("sub"))
@@ -334,6 +374,7 @@ class Window:
 
 
 if __name__ == "__main__":
-    if "--uninstall" in sys.argv:
+    mode = "uninstall" if "--uninstall" in sys.argv else "update" if "--update" in sys.argv else "install"
+    if mode != "install":
         LANG = read_cfg().get("ui", {}).get("lang", "en")
-    Window("uninstall" if "--uninstall" in sys.argv else "install")
+    Window(mode)

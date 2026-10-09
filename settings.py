@@ -40,8 +40,35 @@ DEFAULTS = {
         "export_keyframes": False,
     },
     "ui": {"folder": "", "auto_render": True, "preview_start": 0.0, "preview_len": 5.0, "lang": "ru",
-           "onboarded": False},  # folder — папка записей OBS
+           "onboarded": False, "skip_version": ""},  # folder — папка записей OBS; skip_version — «не сейчас»
 }
+
+
+# Пресеты курсора: набор значений сглаживания и эффектов. «standard» — значения по умолчанию.
+_SM, _RC = DEFAULTS["smoothing"], DEFAULTS["render"]
+PRESET_KEYS = [("smoothing", k) for k in ("method", "stiffness", "damping_ratio", "click_pull_ms", "deadzone_px")] + \
+              [("render", k) for k in ("click_animation", "click_scale", "click_tilt_deg", "click_ms",
+                                       "motion_blur", "blur_length", "blur_opacity")]
+PRESETS = {
+    "standard": {k: (_SM | _RC)[k] for _, k in PRESET_KEYS},
+    "light": {"method": "spring", "stiffness": 900, "damping_ratio": 1.0, "click_pull_ms": 100, "deadzone_px": 2,
+              "click_animation": True, "click_scale": 0.9, "click_tilt_deg": 8, "click_ms": 260,
+              "motion_blur": True, "blur_length": 0.35, "blur_opacity": 0.8},
+    "cinema": {"method": "spring", "stiffness": 180, "damping_ratio": 1.0, "click_pull_ms": 200, "deadzone_px": 4,
+               "click_animation": True, "click_scale": 0.78, "click_tilt_deg": 18, "click_ms": 400,
+               "motion_blur": True, "blur_length": 0.9, "blur_opacity": 1.2},
+    "clean": {k: (_SM | _RC)[k] for _, k in PRESET_KEYS} | {"click_animation": False, "motion_blur": False},
+}
+
+
+def apply_preset(cfg, name):
+    for sec, k in PRESET_KEYS:
+        cfg[sec][k] = PRESETS[name][k]
+
+
+def preset_of(cfg):
+    """Имя пресета, с которым совпадают текущие настройки, иначе None (настроено вручную)."""
+    return next((n for n, p in PRESETS.items() if all(cfg[s][k] == p[k] for s, k in PRESET_KEYS)), None)
 
 
 def _merge(base, over):
