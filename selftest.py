@@ -44,6 +44,16 @@ def check_smoothing():
         assert tr["type"][f(650)] == 1 and tr["type"][f(400)] == 0, (method, "тип курсора")
         assert abs(tr["click_age"][f(833)] - 33.3) < 1 and tr["click_age"][f(400)] < 0, (method, "время клика")
         lag = tr["t"][np.argmax(tr["x"] >= np.interp(250, tr["t"], tr["raw_x"]))] - 250
+        # перетаскивание 1 px/мс, отпущено на ходу: после отпускания курсор не откатывается назад
+        t = np.arange(0, 1500, 1000 / 240)
+        drag = {"display": {"width": 4000, "height": 1000}, "samples": [[a, 100 + min(max(a - 200, 0), 500), 500, 0, 1]
+                                                                       for a in t.tolist()],
+                "clicks": [[200.0, "L", 1], [700.0, "L", 0]]}
+        for name in settings.PRESETS:
+            cfg = {"smoothing": {**SM, "method": method}, "render": {}}
+            settings.apply_preset(cfg, name)
+            x = smoothing.frame_track(drag, 1000, 1500, {**cfg["smoothing"], "method": method}, 0)["x"]
+            assert x[700:].min() > 600 - 0.5, (method, name, "откат после перетаскивания", 600 - x[700:].min())
         print(f"{method}: ок; на середине рывка отстаёт на ~{lag:.0f} мс")
 
 

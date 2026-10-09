@@ -75,23 +75,26 @@ def frame_track(log, fps, n_frames, sm, offset_ms, ghost_ms=()):
     gvis = vis[j]
     reset = gvis & ~np.r_[False, gvis[:-1]]  # курсор появился — без «прилёта» из старой точки
     rx, ry = np.interp(tg, t, x), np.interp(tg, t, y)
-    dzx, dzy = deadzone(x, y, sm["deadzone_px"])
-    tx, ty = np.interp(tg, t, dzx), np.interp(tg, t, dzy)
-    if sm["method"] == "one_euro":
-        e = sm["one_euro"]
-        sx, sy = one_euro(tx, ty, reset, e["min_cutoff"], e["beta"], e["d_cutoff"], STEP_MS / 1000)
-    else:
-        k = sm["stiffness"]
-        sx, sy = spring(tx, ty, reset, k, 2 * sm["damping_ratio"] * math.sqrt(k), STEP_MS / 1000)
     # нажатия: время и длительность (до отпускания той же кнопки; не отпущена — бесконечность)
     presses = []
     for k, (tc, btn, down, *_) in enumerate(log["clicks"]):
         if down == 1:
             up = next((c[0] for c in log["clicks"][k + 1:] if c[1] == btn and c[2] == 0), np.inf)
             presses.append((tc, up - tc))
+    held = np.zeros(len(tg), bool)
+    for tc, ln in presses:
+        held |= (tg >= tc) & (tg <= tc + ln)
+    dzx, dzy = deadzone(x, y, sm["deadzone_px"])
+    tx, ty = np.interp(tg, t, dzx), np.interp(tg, t, dzy)
+    # пока кнопка зажата, фильтр стоит на реальной точке: иначе после отпускания курсор откатится к отставшему фильтру
+    if sm["method"] == "one_euro":
+        e = sm["one_euro"]
+        sx, sy = one_euro(tx, ty, reset | held, e["min_cutoff"], e["beta"], e["d_cutoff"], STEP_MS / 1000)
+    else:
+        k = sm["stiffness"]
+        sx, sy = spring(tx, ty, reset | held, k, 2 * sm["damping_ratio"] * math.sqrt(k), STEP_MS / 1000)
     pull = click_weight(tg, [c[0] for c in log["clicks"]], sm["click_pull_ms"])
-    for tc, ln in presses:  # пока кнопка зажата (перетаскивание) — точно на реальной позиции, иначе отстаём от ползунка
-        pull[(tg >= tc) & (tg <= tc + ln)] = 1.0
+    pull[held] = 1.0  # пока кнопка зажата (перетаскивание) — точно на реальной позиции, иначе отстаём от ползунка
     sx += (rx - sx) * pull
     sy += (ry - sy) * pull
 

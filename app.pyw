@@ -407,9 +407,11 @@ class LivePreview(tk.Canvas):
         if rc["motion_blur"] and level == 0:
             alphas = render.ghost_alphas(rc)
             fps = self.app.last_fps or 30
+            tts, txs, tys = zip(*self.trail)
             for gi in range(len(alphas)):
+                # между точками следа (шаг ~16 мс) — линейно, иначе призраки слипаются в 1–2 копии курсора
                 tg = now - rc["blur_length"] / fps * (gi + 1) / len(alphas)
-                gx, gy = next(((tx, ty) for tt, tx, ty in reversed(self.trail) if tt <= tg), (qx, qy))
+                gx, gy = float(np.interp(tg, tts, txs)), float(np.interp(tg, tts, tys))
                 if abs(gx - qx) + abs(gy - qy) > 0.5:
                     im, (hx, hy) = self.cursor(name, 0, ghost=len(alphas) - 1 - gi)
                     self.create_image(gx - hx, gy - hy, anchor="nw", image=im, tags="dyn")
