@@ -156,14 +156,13 @@ def probe(ffprobe, video):
     return {"w": s["width"], "h": s["height"], "fps": num / den, "frames": int(s["nb_read_packets"]),
             "duration": float(j["format"]["duration"]), "pix_fmt": s.get("pix_fmt", "yuv420p"),
             # без тегов считаем как OBS по умолчанию: BT.709, ограниченный диапазон
-            "space": s.get("color_space", "bt709") if s.get("color_space") in COLOR_MATRICES else "bt709",
-            "range": "pc" if s.get("color_range") == "pc" else "tv",
-            "trc": s.get("color_transfer", "bt709"), "primaries": s.get("color_primaries", "bt709")}
+            "space": tag(s, "color_space"), "range": "pc" if s.get("color_range") == "pc" else "tv",
+            "trc": tag(s, "color_transfer"), "primaries": tag(s, "color_primaries")}
 
 
-# что умеет scale=out_color_matrix (ключ — как пишет ffprobe)
-COLOR_MATRICES = {"bt709": "bt709", "smpte170m": "smpte170m", "bt470bg": "bt601", "fcc": "fcc",
-                  "smpte240m": "smpte240m", "bt2020nc": "bt2020"}
+def tag(stream, key):
+    v = stream.get(key, "unknown")
+    return "bt709" if v in ("unknown", "reserved") else v
 
 
 def make_sprites(work, types, clicked, size, rc):
@@ -313,14 +312,14 @@ def render(video, log_path, cfg, progress=None, clip=None):
         work = Path(tmp)
         slots = make_sprites(work, used, clicked, size, rc)
         write_commands(work / "cmds.txt", track, info, types, slots, span)
-        chain = ["[0:v]sendcmd=f=cmds.txt[v0]"]
+        # Накладываем прямо в YUV исходника: через RGB (format=auto) цвета видео чуть съезжают
+        pf = info["pix_fmt"]
+        sub = "444" if "444" in pf else "422" if "422" in pf else "420"
+        deep = "10" in pf or "12" in pf or "16" in pf
+        chain = [f"[0:v]format=yuv{sub}p{'10le' if deep else ''},sendcmd=f=cmds.txt[v0]"]
         for i, (name, *_) in enumerate(slots, 1):
-            chain.append(f"[v{i - 1}][{i}:v]overlay@{name}=x={HIDE}:y=0:format=auto:eof_action=repeat[v{i}]")
-        # overlay может уйти в RGB; собираем обратно в цвета исходника, иначе плееры показывают другой цветокор
-        n = len(slots)
-        chain[-1] = chain[-1].removesuffix(f"[v{n}]") + (
-            f",scale=out_color_matrix={COLOR_MATRICES[info['space']]}:out_range={info['range']}"
-            f",format={info['pix_fmt']}[v{n}]")
+            chain.append(f"[v{i - 1}][{i}:v]overlay@{name}=x={HIDE}:y=0:format=yuv{sub}{'p10' if deep else ''}"
+                         f":eof_action=repeat[v{i}]")
         (work / "graph.txt").write_text(";".join(chain), encoding="ascii")
         cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-nostats", "-progress", "pipe:1", "-hwaccel", "auto"]
         if clip:
