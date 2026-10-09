@@ -166,7 +166,7 @@ class Obs:
                 yield from self._capture_inputs(it["sourceName"], True, on, mi)
             elif it.get("sourceType") == "OBS_SOURCE_TYPE_SCENE":
                 yield from self._capture_inputs(it["sourceName"], False, on, mi)
-            elif it.get("inputKind") in CURSOR_KEY:
+            elif it.get("inputKind") in CURSOR_KEY and it["sourceName"] != self.VIEW_SOURCE:  # окно просмотра не трогаем
                 yield it["sourceName"], it["inputKind"], on, mi, it["sceneItemTransform"]
 
     SCENE, SOURCE = "Smooth Cursor", "Smooth Cursor · Display"
@@ -193,6 +193,21 @@ class Obs:
             "cropLeft": 0, "cropTop": 0, "cropRight": 0, "cropBottom": 0})
         self.req.set_current_program_scene(self.SCENE)
         log.info(t("OBS настроен: сцена «%s», %s %dx%d @ %d fps"), self.SCENE, d["device"], w, h, fps)
+
+    VIEW_SCENE, VIEW_SOURCE = "Smooth Cursor · Просмотр", "Smooth Cursor · Экран с курсором"
+
+    def open_view(self, d):
+        """Окно с экраном d и курсором — чтобы видеть, куда ведёшь мышь (например, на виртуальном мониторе).
+        В запись не идёт: отдельная сцена со своим захватом экрана (курсор включён) и его оконный проектор.
+        Сцену не делать текущей — в источниках записываемой сцены курсор программа выключает."""
+        if self.VIEW_SCENE not in [s["sceneName"] for s in self.req.get_scene_list().scenes]:
+            self.req.create_scene(self.VIEW_SCENE)
+        props = {"monitor_id": d["id"], "capture_cursor": True}
+        if self.VIEW_SOURCE in [i["inputName"] for i in self.req.get_input_list().inputs]:
+            self.req.set_input_settings(self.VIEW_SOURCE, props, True)
+        else:
+            self.req.create_input(self.VIEW_SCENE, self.VIEW_SOURCE, "monitor_capture", props, True)
+        self.req.send("OpenSourceProjector", {"sourceName": self.VIEW_SOURCE, "monitorIndex": -1})  # окном
 
     def start(self):
         if self.req.get_record_status().output_active:

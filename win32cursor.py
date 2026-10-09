@@ -1,4 +1,5 @@
 """Win32 через ctypes: DPI awareness, поиск дисплея, логгер курсора, спрайты системных курсоров."""
+import contextlib
 import ctypes as C
 import ctypes.wintypes as W
 import os
@@ -24,6 +25,20 @@ user32.AreDpiAwarenessContextsEqual.argtypes = [C.c_void_p, C.c_void_p]
 user32.SetProcessDpiAwarenessContext(_PMV2)
 if not user32.AreDpiAwarenessContextsEqual(user32.GetThreadDpiAwarenessContext(), _PMV2):
     raise RuntimeError("Не удалось включить Per-Monitor DPI Aware v2")
+user32.SetThreadDpiAwarenessContext.argtypes = [C.c_void_p]
+user32.SetThreadDpiAwarenessContext.restype = C.c_void_p
+
+
+@contextlib.contextmanager
+def physical():
+    """Настоящие пиксели и в потоке окна программы: его масштабирует Windows (app.pyw), и без этого координаты
+    курсора и размеры мониторов там пересчитаны под масштаб экрана."""
+    old = user32.SetThreadDpiAwarenessContext(_PMV2)
+    try:
+        yield
+    finally:
+        if old:
+            user32.SetThreadDpiAwarenessContext(old)
 
 user32.LoadCursorW.argtypes = [W.HINSTANCE, C.c_void_p]
 user32.LoadCursorW.restype = C.c_void_p
@@ -101,7 +116,8 @@ def list_monitors():
         return True
 
     proc = C.WINFUNCTYPE(W.BOOL, W.HMONITOR, W.HDC, C.POINTER(W.RECT), W.LPARAM)(cb)
-    user32.EnumDisplayMonitors(None, None, proc, 0)
+    with physical():
+        user32.EnumDisplayMonitors(None, None, proc, 0)
     return out
 
 

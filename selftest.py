@@ -150,7 +150,7 @@ def check_accurate_blur():
                       [2600.0, "L", 1, 1800, 300], [2700.0, "L", 0, 1800, 300]]}
     cfg = settings.load()
     cfg["sync"]["offset_ms"] = 0
-    cfg["render"].update(codec="libx264", click_animation=True, motion_blur=True, blur_length=1.0, debug_raw=False,
+    cfg["render"].update(codec="libx264", click_animation=True, motion_blur=True, shutter=30, debug_raw=False,
                          export_keyframes=False, cursor_scale=1.0)
     ff = render.tool(cfg["render"]["ffmpeg"], "ffmpeg")
     args, render.encoder_args = render.encoder_args, lambda codec, cq, preset: ["-qp", "0", "-pix_fmt", "yuv420p"]

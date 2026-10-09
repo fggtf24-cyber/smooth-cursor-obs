@@ -337,8 +337,9 @@ class LivePreview(tk.Canvas):
         if not self.winfo_viewable():
             return
         u = wc.user32
-        u.GetCursorPos(C.byref(self.pt))
-        u.GetCursorInfo(C.byref(self.ci))
+        with wc.physical():  # окно масштабирует Windows, а курсор и мониторы — в настоящих пикселях
+            u.GetCursorPos(C.byref(self.pt))
+            u.GetCursorInfo(C.byref(self.ci))
         mon = next((m for m in self.app.monitors if m["left"] <= self.pt.x < m["left"] + m["width"]
                     and m["top"] <= self.pt.y < m["top"] + m["height"]), None)
         now = time.perf_counter()
@@ -410,7 +411,8 @@ class LivePreview(tk.Canvas):
             tts, txs, tys = zip(*self.trail)
             for gi in range(len(alphas)):
                 # между точками следа (шаг ~16 мс) — линейно, иначе призраки слипаются в 1–2 копии курсора
-                tg = now - rc["blur_length"] / fps * (gi + 1) / len(alphas)
+                span = 1 / rc["shutter"] if self.app.accurate_blur() else rc["blur_length"] / fps
+                tg = now - span * (gi + 1) / len(alphas)
                 gx, gy = float(np.interp(tg, tts, txs)), float(np.interp(tg, tts, tys))
                 if abs(gx - qx) + abs(gy - qy) > 0.5:
                     im, (hx, hy) = self.cursor(name, 0, ghost=len(alphas) - 1 - gi)
@@ -1063,6 +1065,9 @@ class App:
         top_now.pack(fill="x", pady=(0, 6))
         self.lbl(top_now, t("СЕЙЧАС В OBS"), "caps", INK).pack(side="left")
         Btn(top_now, t("Проверить"), self.refresh_obs, small=True).pack(side="left", padx=(14, 0))
+        view = Btn(top_now, t("Окно с курсором"), self.open_view, small=True)
+        view.pack(side="left", padx=(6, 0))
+        self.hint_on((view,), "Окно с курсором", "экран, который пишется, но с курсором — для себя, в запись не идёт.")
         self.now = [self.lbl(now, "", "small", INK2, anchor="w") for _ in range(3)]
         for w in self.now:
             w.pack(anchor="w")
@@ -1518,16 +1523,27 @@ class App:
                     "1 — как в системе, с учётом масштаба экрана и масштаба захвата в сцене OBS.")
         g, h = self.section(r, "Шлейф · motion blur")
         self.toggle_row(h, "включён", "render.motion_blur").pack(side="right")
-        self.slider(g, 0, "Длина", "render.blur_length", 0.1, 1.5, 0.05,
-                    "В долях кадра: 0.5 — как у камеры с выдержкой 180°. В покое и при анимации клика шлейфа нет.")
-        self.slider(g, 1, "Плотность", "render.blur_opacity", 0.2, 2, 0.05,
-                    "Насколько заметен шлейф. В точном режиме не используется.")
+        if self.accurate_blur():  # выдержка как на камере: 1/60 — курсор смазан за 1/60 с
+            name = self.lbl(g, t("Выдержка"))
+            name.grid(row=0, column=0, sticky="w", pady=4)
+            seg = self.segmented(g, "render.shutter", {n: f"1/{n}" for n in (30, 50, 60, 100, 120, 250, 500)})
+            seg.grid(row=0, column=1, columnspan=2, sticky="w")
+            self.hint_on((name, seg, *seg.winfo_children()), "Выдержка",
+                         "как у камеры: курсор смазан за это время. Для «киношного» вида — вдвое короче кадра: "
+                         "1/60 при 30 fps.")
+        else:
+            self.slider(g, 0, "Длина", "render.blur_length", 0.1, 1.5, 0.05,
+                        "В долях кадра: 0.5 — как у камеры с выдержкой 180°. В покое и при анимации клика шлейфа нет.")
+        if not self.accurate_blur():  # у точного блюра яркость смаза задаёт сама выдержка
+            self.slider(g, 1, "Плотность", "render.blur_opacity", 0.2, 2, 0.05,
+                        "Насколько заметен шлейф. В точном режиме не используется.")
+
         def acc_changed():
             rc = self.cfg["render"]
-            if rc["blur_accurate"] and not rc["motion_blur"]:  # точный блюр — тоже шлейф: включаем его
-                rc["motion_blur"] = True
-                settings.save(self.cfg)
-                self.rebuild()
+            if rc["blur_accurate"]:
+                rc["motion_blur"] = True  # точный блюр — тоже шлейф: включаем его
+            settings.save(self.cfg)
+            self.rebuild()  # «Длина» ↔ «Выдержка»
 
         acc = self.toggle_row(g, "Точный, как у камеры — рендер дольше", "render.blur_accurate", acc_changed)
         acc.grid(row=2, column=0, columnspan=3, sticky="w", pady=(6, 0))
@@ -1686,6 +1702,21 @@ class App:
             log.info(t("OBS теперь сохраняет записи в %s"), folder)
         except Exception as e:
             log.error(t("Не удалось сменить папку записей в OBS (нужен OBS 30 или новее): %s"), e)
+
+    def open_view(self):
+        """Оконный проектор записываемого экрана с курсором (сцена «Smooth Cursor · Просмотр» в OBS)."""
+        if not self.recorder:
+            return self.connect()
+
+        def work():
+            try:
+                d = self.recorder.pick_display()
+                self.recorder.obs.open_view(d)
+                log.info(t("Окно с курсором: %s — в запись не идёт"), d["device"].split(chr(92))[-1])
+            except Exception as e:
+                log.error("%s", e)
+
+        self.worker.submit(work)
 
     def check_display(self):
         if self.recorder:
@@ -1938,8 +1969,11 @@ class App:
 
 def main():
     load_fonts()
+    # Окно программы масштабирует сама Windows (GDI scaling): под масштаб монитора и сразу при переносе на другой,
+    # текст и линии чёткие. Только для этого потока — запись, рендер и хоткей идут в настоящих пикселях.
+    wc.user32.SetThreadDpiAwarenessContext(C.c_void_p(-5))  # DPI_AWARENESS_CONTEXT_UNAWARE_GDISCALED
     root = tk.Tk()
-    root.tk.call("tk", "scaling", 96 / 72)  # одинаковая вёрстка при любом масштабе Windows
+    root.tk.call("tk", "scaling", 96 / 72)  # вёрстка в «пикселях при 100%», дальше растягивает Windows
     App(root)
     root.mainloop()
 

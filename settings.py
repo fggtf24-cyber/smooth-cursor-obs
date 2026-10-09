@@ -37,6 +37,7 @@ DEFAULTS = {
         "blur_length": 0.5,       # длина шлейфа в долях кадра (0.5 — затвор 180°)
         "blur_opacity": 1.0,      # плотность шлейфа
         "blur_accurate": False,   # точный motion blur (как у камеры) вместо копий курсора — рендер дольше
+        "shutter": 60,            # его выдержка, как на камере: 1/60 с
         "debug_raw": False,
         "export_keyframes": False,
     },

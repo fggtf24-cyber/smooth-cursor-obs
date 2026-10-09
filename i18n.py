@@ -186,7 +186,13 @@ EN.update({
         "How visible the trail is. Not used in accurate mode.",
     "Точный, как у камеры — рендер дольше": "Accurate, like a camera — slower render",
     "Точный motion blur": "Accurate motion blur", "точный блюр": "accurate blur",
-    "Точный": "Accurate",
+    "Точный": "Accurate", "Выдержка": "Shutter",
+    "как у камеры: курсор смазан за это время. Для «киношного» вида — вдвое короче кадра: 1/60 при 30 fps.":
+        "like a camera: the cursor is smeared over this time. For a film look, half a frame: 1/60 at 30 fps.",
+    "Окно с курсором": "Cursor window",
+    "экран, который пишется, но с курсором — для себя, в запись не идёт.":
+        "the recorded screen, but with the cursor — for you, not recorded.",
+    "Окно с курсором: %s — в запись не идёт": "Cursor window: %s — not recorded",
     "смаз по всей выдержке вместо копий. Цена: рендер до 1,6× дольше, шлейф бледнее, превью упрощённое.":
         "smear over the whole shutter instead of copies. Cost: up to 1.6× slower render, fainter trail, "
         "simplified preview.",
@@ -194,7 +200,7 @@ EN.update({
     "1,6× дольше, шлейф бледнее копий.":
         "Like a camera: the cursor is smeared over the whole\nshutter instead of drawn as copies. Cost: up to 1.6×\n"
         "slower render on fast moves, a fainter trail.",
-    "Точный motion blur: слой %dx%d px": "Accurate motion blur: layer %dx%d px",
+    "Точный motion blur: выдержка 1/%d с, слой %dx%d px": "Accurate motion blur: shutter 1/%d s, layer %dx%d px",
     # --- вывод ---
     "Кодирование": "Encoding", "Кодек": "Codec", "Авто": "Auto", "Процессор": "CPU", "Пресет": "Preset",
     "Качество (CQ)": "Quality (CQ)",

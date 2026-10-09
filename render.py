@@ -272,14 +272,14 @@ BLUR_CAP, BLUR_SAMPLES = 512, 256  # точный motion blur: слой не б�
 
 
 def blur_plan(track, sprites, types, fps, rc, grid, f0, f1):
-    """Точный motion blur, как у камеры: курсор усреднён по всем моментам выдержки [t − blur_length кадра, t]
+    """Точный motion blur, как у камеры: курсор усреднён по всем моментам выдержки [t − 1/shutter с, t]
     с шагом ≈ 1 px пути, а не нарисован отдельными копиями. Каждый кадр курсора — готовый слой RGBA.
 
     sprites: {имя: (RGBA float32, hotspot)}; grid: (время мс, x, y, виден) траектории с шагом 1 мс в пикселях
     видео; f0…f1 — нужные кадры. Возвращает (ширина, высота слоя, {кадр: левый верхний угол}, байты слоёв).
     Хвост длиннее BLUR_CAP обрезается: при такой скорости он почти прозрачный."""
     tg, gx, gy, gv = grid
-    S, tf = rc["blur_length"] * 1000 / fps, track["t"]
+    S, tf = 1000 / rc["shutter"], track["t"]  # выдержка в мс: 1/60 с → 16.7
     prem = {}  # спрайты с премультиплицированной альфой: их можно просто складывать
     for name, (img, hot) in sprites.items():
         a = img[..., 3:] / 255
@@ -442,7 +442,7 @@ def render(video, log_path, cfg, progress=None, clip=None):
             tg, sx, sy, gvis = track["path"]
             gv = gvis & (sx >= cl) & (sx < cr) & (sy >= ct) & (sy < cb)
             pw, ph, blur, layers = blur_plan(track, sprites, types, fps, rc, (tg, *to_video(sx, sy), gv), f0, f1)
-            log.info(t("Точный motion blur: слой %dx%d px"), pw, ph)
+            log.info(t("Точный motion blur: выдержка 1/%d с, слой %dx%d px"), rc["shutter"], pw, ph)
             blur_in = ["-f", "rawvideo", "-pixel_format", "rgba", "-video_size", f"{pw}x{ph}", "-framerate",
                        info["rate"], "-i", "pipe:0"]
             blur_off = (f0 - 0.5) / fps - span[0]
