@@ -83,19 +83,21 @@ def frame_track(log, fps, n_frames, sm, offset_ms, ghost_ms=()):
     else:
         k = sm["stiffness"]
         sx, sy = spring(tx, ty, reset, k, 2 * sm["damping_ratio"] * math.sqrt(k), STEP_MS / 1000)
-    pull = click_weight(tg, [c[0] for c in log["clicks"]], sm["click_pull_ms"])
-    sx += (rx - sx) * pull
-    sy += (ry - sy) * pull
-
-    tf = np.arange(n_frames) * 1000 / fps - offset_ms
-    idx = lambda tt: np.clip(np.round((tt - tg[0]) / STEP_MS).astype(int), 0, len(tg) - 1)
-    i = idx(tf)
     # нажатия: время и длительность (до отпускания той же кнопки; не отпущена — бесконечность)
     presses = []
     for k, (tc, btn, down, *_) in enumerate(log["clicks"]):
         if down == 1:
             up = next((c[0] for c in log["clicks"][k + 1:] if c[1] == btn and c[2] == 0), np.inf)
             presses.append((tc, up - tc))
+    pull = click_weight(tg, [c[0] for c in log["clicks"]], sm["click_pull_ms"])
+    for tc, ln in presses:  # пока кнопка зажата (перетаскивание) — точно на реальной позиции, иначе отстаём от ползунка
+        pull[(tg >= tc) & (tg <= tc + ln)] = 1.0
+    sx += (rx - sx) * pull
+    sy += (ry - sy) * pull
+
+    tf = np.arange(n_frames) * 1000 / fps - offset_ms
+    idx = lambda tt: np.clip(np.round((tt - tg[0]) / STEP_MS).astype(int), 0, len(tg) - 1)
+    i = idx(tf)
     downs = np.array([p[0] for p in presses] or [-np.inf])
     lens = np.array([p[1] for p in presses] or [0.0])
     last = np.maximum(np.searchsorted(downs, tf, "right") - 1, 0)
