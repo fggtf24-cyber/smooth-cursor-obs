@@ -277,6 +277,7 @@ class LivePreview(tk.Canvas):
         self.glow = photo(g)
         self.pix, self.trail = {}, collections.deque(maxlen=45)
         self.mon, self.last_t, self.press_t, self.release_t, self.was_down = None, time.perf_counter(), -1e9, -1e9, False
+        self.click_anim_t = -1e9  # когда последний раз играла анимация клика: после неё наклон возвращается плавно
         self.handles = {wc.user32.LoadCursorW(None, cid): n for n, (cid, _) in wc.CURSORS.items()}
         self.sets, self.sig, self.sig_seen, self.sig_t = {}, None, None, 0
         self.pt, self.ci = W.POINT(), wc.CURSORINFO(cbSize=C.sizeof(wc.CURSORINFO))
@@ -403,8 +404,11 @@ class LivePreview(tk.Canvas):
             held = np.inf if down else (self.release_t - self.press_t) * 1000  # пока ЛКМ зажата — наклон держится
             level = int(round(float(render.click_curve((now - self.press_t) * 1000, rc["click_ms"], held))
                               * (render.CLICK_STEPS - 1)))
+        if level:
+            self.click_anim_t = now
         (ta, xa), (tb, xb) = self.trail[max(0, len(self.trail) - 2)][:2], self.trail[-1][:2]
-        tilt = int(render.tilt_level((xb - xa) / max(tb - ta, 1e-3) / (mon["width"] * s), rc["motion_tilt_deg"]))
+        tilt = int(render.tilt_level((xb - xa) / max(tb - ta, 1e-3) / (mon["width"] * s), rc["motion_tilt_deg"],
+                                     (now - self.click_anim_t) * 1000))
         if rc["motion_blur"] and level == 0:
             alphas = render.ghost_alphas(rc)
             fps = self.app.last_fps or 30
@@ -415,7 +419,7 @@ class LivePreview(tk.Canvas):
                 tg = now - span * (gi + 1) / len(alphas)
                 gx, gy = float(np.interp(tg, tts, txs)), float(np.interp(tg, tts, tys))
                 if abs(gx - qx) + abs(gy - qy) > 0.5:
-                    im, (hx, hy), _ = self.cursor(name, 0, tilt, ghost=len(alphas) - 1 - gi)
+                    im, (hx, hy), _ = self.cursor(name, 0, render.ghost_tilt(tilt), ghost=len(alphas) - 1 - gi)
                     self.create_image(gx - hx, gy - hy, anchor="nw", image=im, tags="dyn")
         im, (hx, hy), _ = self.cursor(name, level, tilt)
         self.create_image(qx - hx, qy - hy, anchor="nw", image=im, tags="dyn")

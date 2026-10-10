@@ -6,6 +6,7 @@
 import csv
 import json
 import logging
+import math
 import os
 import shutil
 import subprocess
@@ -27,6 +28,7 @@ HIDE = -10000
 CLICK_STEPS = 16  # шагов анимации клика (0 — обычный курсор)
 TILT_STEPS = 5    # шагов наклона в движении в каждую сторону: при 5° — по градусу, на ходу ступенек не видно
 TILT_SPEED = 0.5  # ширин кадра в секунду по горизонтали: на этой скорости наклон — 3/4 от заданного
+TILT_RAMP_MS = 150  # после анимации клика наклон возвращается за это время, а не скачком
 
 
 def click_curve(age_ms, duration_ms, press_ms=0):
@@ -43,7 +45,10 @@ def click_curve(age_ms, duration_ms, press_ms=0):
 
 def press_sprite(img, hot, scale, deg):
     """Сжатие и поворот против часовой вокруг hotspot: точка клика остаётся на месте. Возвращает (картинка, hotspot)."""
-    r = 2 * max(img.size)  # холст с запасом, чтобы повёрнутый курсор не обрезался
+    x0, y0, x1, y1 = img.getbbox() or (0, 0, *img.size)
+    # холст — круг до дальнего угла курсора: повёрнутый не обрежется, а лишних пикселей не крутим (это дорого).
+    # Кратно 4: при уменьшении 4× спрайта пиксели ложатся на сетку обычного курсора, а не между ними (мыло).
+    r = 4 * math.ceil((max(math.hypot(x - hot[0], y - hot[1]) for x in (x0, x1) for y in (y0, y1)) + 2) / 4)
     c = Image.new("RGBa", (2 * r, 2 * r))
     c.paste(img.convert("RGBa"), (round(r - hot[0]), round(r - hot[1])))
     n = round(2 * r * scale)
@@ -59,10 +64,19 @@ def pose_sprite(big, big_hot, rc, lvl, tilt):
                         rc["click_tilt_deg"] * p + tilt * rc["motion_tilt_deg"] / TILT_STEPS)
 
 
-def tilt_level(v, max_deg):
+def tilt_level(v, max_deg, since_click_ms=np.inf):
     """Шаг наклона в движении по скорости v (ширин кадра в секунду по горизонтали), −TILT_STEPS…TILT_STEPS:
-    плавно растёт со скоростью и упирается в заданный угол. Вправо — наклон вправо, то есть по часовой (минус)."""
-    return np.round(-np.tanh(np.asarray(v) / TILT_SPEED) * TILT_STEPS * bool(max_deg)).astype(int)
+    плавно растёт со скоростью и упирается в заданный угол. Вправо — наклон вправо, то есть по часовой (минус).
+    Во время анимации клика (since_click_ms = 0) наклона нет: клик сам поворачивает курсор, а пары «шаг клика ×
+    шаг наклона» дали бы сотни спрайтов и рендер в 2–3 раза дольше. После неё наклон плавно возвращается."""
+    w = np.clip(np.asarray(since_click_ms, float) / TILT_RAMP_MS, 0, 1) * bool(max_deg)
+    return np.round(-np.tanh(np.asarray(v) / TILT_SPEED) * TILT_STEPS * w).astype(int)
+
+
+def ghost_tilt(k):
+    """Шаг наклона «призраков» шлейфа — через один: они бледные и сдвинуты назад, разницы в градус не видно, а слоёв
+    в ffmpeg вдвое меньше (каждый слой — время на каждом кадре)."""
+    return int(np.round(k / 2)) * 2
 
 
 def tilt_tag(k):
@@ -202,13 +216,14 @@ def make_sprites(work, types, poses, size, rc):
 
     mains = {p: pose(*p) for p in sorted({(t, 0, 0) for t in types} | set(poses))}
     slots = []
-    if rc["motion_blur"]:  # «призраки» — без анимации клика (при ней их нет), с тем же наклоном, что курсор
+    if rc["motion_blur"]:  # «призраки» — без анимации клика (при ней их нет), наклонены почти как курсор
+        ghosts = {(t, gk): mains.get((t, 0, gk)) or pose(t, 0, gk)
+                  for t, gk in sorted({(t, ghost_tilt(k)) for t, lvl, k in mains if not lvl})}
         for gi, a in enumerate(ghost_alphas(rc)):
-            for (t, lvl, k), (img, hot) in mains.items():
-                if not lvl:
-                    g = img.copy()
-                    g.putalpha(img.getchannel("A").point(lambda v: round(v * a)))
-                    slots.append((f"g{gi}_{t}{tilt_tag(k)}", g, hot))
+            for (t, gk), (img, hot) in ghosts.items():
+                g = img.copy()
+                g.putalpha(img.getchannel("A").point(lambda v: round(v * a)))
+                slots.append((f"g{gi}_{t}{tilt_tag(gk)}", g, hot))
     slots += [(f"{t}_{lvl}{tilt_tag(k)}", img, hot) for (t, lvl, k), (img, hot) in mains.items()]
     if rc["debug_raw"]:
         img, hot = mains.get(("arrow", 0, 0)) or wc.cursor_sprite("arrow", size)
@@ -267,7 +282,7 @@ def write_commands(path, track, info, types, slots, clip, blur=None):
                 # наклонённого курсора, а в покое утолщали бы его края.
                 for gi, (gx, gy) in enumerate(track["vghosts"]):
                     if lvl == 0 and abs(gx[n] - x) + abs(gy[n] - y) > 0.5:
-                        want[f"g{n_ghosts - 1 - gi}_{t}{tilt_tag(track['tilt'][n])}"] = (gx[n], gy[n])
+                        want[f"g{n_ghosts - 1 - gi}_{t}{tilt_tag(ghost_tilt(track['tilt'][n]))}"] = (gx[n], gy[n])
             if "raw" in hot and 0 <= track["raw_x"][n] < info["dw"] and 0 <= track["raw_y"][n] < info["dh"]:
                 want["raw"] = (track["raw_vx"][n], track["raw_vy"][n])
             cmds = []
@@ -442,7 +457,9 @@ def render(video, log_path, cfg, progress=None, clip=None):
     v = np.gradient(track["vx"]) * fps / info["w"] if len(vis) > 1 else np.zeros(len(vis))
     # там, где курсор появляется или пропадает, разница позиций — скачок, а не скорость
     ok = vis & np.r_[vis[1:], True] & np.r_[True, vis[:-1]]
-    track["tilt"] = np.where(ok, tilt_level(v, rc["motion_tilt_deg"]), 0)
+    frames = np.arange(len(vis))
+    since = (frames - np.maximum.accumulate(np.where(track["level"] > 0, frames, -len(vis)))) * 1000 / fps
+    track["tilt"] = np.where(ok, tilt_level(v, rc["motion_tilt_deg"], since), 0)
     types = lg["types"]
     used = sorted({types[k] for k in np.unique(track["type"][vis])} | {"arrow"}, key=types.index)
     poses = {(types[k], lvl, tl) for k, lvl, tl in zip(*(track[c][vis].tolist() for c in ("type", "level", "tilt")))}
