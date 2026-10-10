@@ -232,23 +232,6 @@ def pixel_logo(parent):
     return c
 
 
-def cursor_set(name, size, rc):
-    """Курсор для превью: [(картинка, hotspot)] по шагам анимации клика + «призраки» шлейфа."""
-    img, hot = wc.cursor_sprite(name, size)
-    big, big_hot = wc.cursor_sprite(name, size * 4)
-    levels = [(photo(img), hot)]
-    for li in range(1, render.CLICK_STEPS):
-        p = li / (render.CLICK_STEPS - 1)
-        im, h = render.press_sprite(big, big_hot, (1 - (1 - rc["click_scale"]) * p) / 4, rc["click_tilt_deg"] * p)
-        levels.append((photo(im), h))
-    ghosts = []
-    for a in render.ghost_alphas(rc):
-        g = img.copy()
-        g.putalpha(img.getchannel("A").point(lambda v: round(v * a)))
-        ghosts.append((photo(g), hot))
-    return levels, ghosts
-
-
 class LivePreview(tk.Canvas):
     """Чёрный «рельеф» с пиксельными краями и цифрами, как в «Сапёре». Внутри курсор повторяет мышь со
     сглаживанием, анимацией клика и шлейфом — с текущими настройками. Рука оставляет затухающий
@@ -316,19 +299,34 @@ class LivePreview(tk.Canvas):
         b[r0:r1 + 1, c0:c1 + 1] = True
         return b
 
-    def cursor(self, name, level, ghost=None):
+    def cursor(self, name, level, tilt, ghost=None):
+        """(картинка, hotspot): шаг анимации клика, шаг наклона в движении; ghost — номер «призрака» шлейфа.
+        Спрайты собираются по мере надобности — их сотни, а нужны единицы."""
         rc = self.app.cfg["render"]
-        sig = (rc["click_scale"], rc["click_tilt_deg"], rc["blur_opacity"], rc["blur_length"], rc["cursor_scale"])
+        sig = (rc["click_scale"], rc["click_tilt_deg"], rc["blur_opacity"], rc["blur_length"], rc["cursor_scale"],
+               rc["motion_tilt_deg"])
         now = time.perf_counter()
         if sig != self.sig:  # пересобрать спрайты, когда ползунок замер на 0.15 с (не на каждом шаге)
             if sig != self.sig_seen:
                 self.sig_seen, self.sig_t = sig, now
             if self.sig is None or now - self.sig_t > 0.15:
                 self.sig, self.sets = sig, {}
-        if name not in self.sets:
-            self.sets[name] = cursor_set(name, max(8, round(30 * rc["cursor_scale"])), rc)
-        levels, ghosts = self.sets[name]
-        return ghosts[min(ghost, len(ghosts) - 1)] if ghost is not None else levels[min(level, len(levels) - 1)]
+        key = (name, level, tilt, ghost)
+        if key not in self.sets:
+            size = max(8, round(30 * rc["cursor_scale"]))
+            if ghost is not None:
+                _, hot, img = self.cursor(name, 0, tilt)
+                a = render.ghost_alphas(rc)[ghost]
+                img = img.copy()
+                img.putalpha(img.getchannel("A").point(lambda v: round(v * a)))
+            elif level or tilt:
+                if (name, "big") not in self.sets:
+                    self.sets[(name, "big")] = wc.cursor_sprite(name, size * 4)
+                img, hot = render.pose_sprite(*self.sets[(name, "big")], rc, level, tilt)
+            else:
+                img, hot = wc.cursor_sprite(name, size)
+            self.sets[key] = (photo(img), hot, img)
+        return self.sets[key]
 
     def tick(self):
         if not self.winfo_exists():  # окно пересобрано (смена языка) — этот холст больше не нужен
@@ -405,6 +403,8 @@ class LivePreview(tk.Canvas):
             held = np.inf if down else (self.release_t - self.press_t) * 1000  # пока ЛКМ зажата — наклон держится
             level = int(round(float(render.click_curve((now - self.press_t) * 1000, rc["click_ms"], held))
                               * (render.CLICK_STEPS - 1)))
+        (ta, xa), (tb, xb) = self.trail[max(0, len(self.trail) - 2)][:2], self.trail[-1][:2]
+        tilt = int(render.tilt_level((xb - xa) / max(tb - ta, 1e-3) / (mon["width"] * s), rc["motion_tilt_deg"]))
         if rc["motion_blur"] and level == 0:
             alphas = render.ghost_alphas(rc)
             fps = self.app.last_fps or 30
@@ -415,9 +415,9 @@ class LivePreview(tk.Canvas):
                 tg = now - span * (gi + 1) / len(alphas)
                 gx, gy = float(np.interp(tg, tts, txs)), float(np.interp(tg, tts, tys))
                 if abs(gx - qx) + abs(gy - qy) > 0.5:
-                    im, (hx, hy) = self.cursor(name, 0, ghost=len(alphas) - 1 - gi)
+                    im, (hx, hy), _ = self.cursor(name, 0, tilt, ghost=len(alphas) - 1 - gi)
                     self.create_image(gx - hx, gy - hy, anchor="nw", image=im, tags="dyn")
-        im, (hx, hy) = self.cursor(name, level)
+        im, (hx, hy), _ = self.cursor(name, level, tilt)
         self.create_image(qx - hx, qy - hy, anchor="nw", image=im, tags="dyn")
 
 
@@ -1410,7 +1410,8 @@ class App:
         sb.pack(side="right", fill="y")
         self.tree.bind("<Double-1>", lambda e: self.open_selected(result=True))
 
-    PRESET_NAMES = {"standard": "Стандарт", "light": "Лёгкий", "cinema": "Кино", "clean": "Без эффектов"}
+    PRESET_NAMES = {"standard": "Стандарт", "light": "Лёгкий", "cinema": "Кино", "tilt": "С наклоном",
+                    "clean": "Без эффектов"}
 
     def accurate_blur(self):
         rc = self.cfg["render"]
@@ -1518,6 +1519,9 @@ class App:
         g, _ = self.section(r, "Курсор")
         self.slider(g, 0, "Размер", "render.cursor_scale", 0.5, 3, 0.05,
                     "1 — как в системе, с учётом масштаба экрана и масштаба захвата в сцене OBS.")
+        self.slider(g, 1, "Наклон в движении", "render.motion_tilt_deg", -15, 15, 1,
+                    "Градусы: на ходу курсор наклоняется в сторону движения (вправо — вправо), чем быстрее, тем "
+                    "сильнее; в покое ровный. Минус — назад, 0 — выключено.", fmt=lambda v: f"{v}°")
         g, h = self.section(r, "Шлейф · motion blur")
         self.toggle_row(h, "включён", "render.motion_blur").pack(side="right")
         if self.accurate_blur():  # выдержка как на камере: 1/60 — курсор смазан за 1/60 с

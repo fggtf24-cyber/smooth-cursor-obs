@@ -67,6 +67,9 @@ def check_click_animation():
     held = render.click_curve(np.array([80, 1500, 2080, 2400]), 320, 2000)  # держали кнопку 2 с
     assert held[0] == 1 and held[1] == 1 and 0 < held[2] < 1 and held[3] == 0, ("удержание", held)
     assert render.click_curve(np.array(5000.0), 320, np.inf) == 1, "пока кнопка зажата — наклон держится"
+    lv = render.tilt_level(np.array([2.0, 0.1, 0, -2.0]), 5)  # ширин кадра в секунду
+    assert lv[0] == -render.TILT_STEPS and -render.TILT_STEPS < lv[1] < 0 and lv[2] == 0 and lv[3] == render.TILT_STEPS,         ("вправо — наклон вправо (по часовой), чем быстрее, тем сильнее", lv)
+    assert not render.tilt_level(np.array([2.0, -2.0]), 0).any(), "0° — наклон выключен"
     # точка клика (hotspot) остаётся на месте при повороте и сжатии
     a = np.zeros((40, 40, 4), np.uint8)
     a[8:13, 8:13] = a[30:33, 20:23] = 255  # метка на hotspot (10,10) и вторая — чтобы было что поворачивать
@@ -167,9 +170,9 @@ def check_accurate_blur():
                             "bt709", "-color_trc", "bt709", "-color_range", "tv", str(video)], check=True)
             lp.write_text(json.dumps(log))
 
-            def luma(accurate, clip=None):  # яркость Y как есть (16 — чёрный)
+            def luma(accurate, clip=None, tilt=0):  # яркость Y как есть (16 — чёрный)
                 c = copy.deepcopy(cfg)
-                c["render"]["blur_accurate"] = accurate
+                c["render"].update(blur_accurate=accurate, motion_tilt_deg=tilt)
                 out = render.render(video, lp, c, progress=lambda pct: False, clip=clip)
                 raw = subprocess.run([ff, "-v", "error", "-i", str(out), "-f", "rawvideo", "-pix_fmt", "yuv420p", "-"],
                                      capture_output=True, check=True).stdout
@@ -195,9 +198,15 @@ def check_accurate_blur():
                 assert abs(A[n].sum() / A[40].sum() - 1) < 0.03, (n, "смаз несёт не столько света, сколько курсор")
             P = luma(True, clip=(1.73, 0.5))
             assert len(P) == 15 and all((P[k] == A[52 + k]).all() for k in range(len(P))), "превью сдвинуто"
+            # наклон в движении: на ходу курсор (и шлейф) наклонён, в покое — тот же, что без наклона
+            for ref, acc in ((G, False), (A, True)):
+                T = luma(acc, tilt=5)
+                bad = [n for n in still if (T[n] != ref[n]).any()]
+                assert not bad, ("наклон в покое", acc, bad)
+                assert all((T[n] != ref[n]).any() for n in (56, 58, 60)), ("на ходу нет наклона", acc)
     finally:
         render.encoder_args = args
-    print("точный motion blur: ок")
+    print("точный motion blur и наклон в движении: ок")
 
 
 def check_presets():

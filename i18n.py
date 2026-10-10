@@ -156,6 +156,7 @@ EN.update({
     "Не удалось обновиться: %s": "Update failed: %s",
     "файл обновления повреждён (не совпала контрольная сумма)": "the update file is corrupted (checksum mismatch)",
     "Пресет": "Preset", "Стандарт": "Standard", "Лёгкий": "Light", "Кино": "Cinematic", "Без эффектов": "No effects",
+    "С наклоном": "Lean",
     "свой": "custom", "Меняет сглаживание и эффекты.\nДальше можно подстроить ползунками.":
         "Sets smoothing and effects.\nFine-tune with the sliders afterwards.",
     "Почти без задержки, сглаживает в основном медленные движения.": "Almost no delay, smooths mostly slow movements.",
@@ -175,7 +176,11 @@ EN.update({
     "Длительность": "Duration",
     "мс: первая четверть — нажатие, затем плавный возврат. Пока кнопка зажата, наклон держится.":
         "ms: the first quarter presses in, the rest eases back. The tilt holds while the button is down.",
-    "Курсор": "Cursor", "Размер": "Size",
+    "Курсор": "Cursor", "Размер": "Size", "Наклон в движении": "Lean in motion",
+    "Градусы: на ходу курсор наклоняется в сторону движения (вправо — вправо), чем быстрее, тем сильнее; в покое "
+    "ровный. Минус — назад, 0 — выключено.":
+        "Degrees: while moving, the cursor leans the way it goes (right means right), more at higher speed; upright "
+        "at rest. Negative leans back, 0 is off.",
     "1 — как в системе, с учётом масштаба экрана и масштаба захвата в сцене OBS.":
         "1 is the system size, adjusted for display scaling and the capture scale in the OBS scene.",
     "Шлейф · motion blur": "Trail · motion blur", "Длина": "Length",

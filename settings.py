@@ -33,6 +33,7 @@ DEFAULTS = {
         "click_scale": 0.82,      # до какого масштаба сжимается при клике
         "click_tilt_deg": 15,     # наклон против часовой (минус — по часовой)
         "click_ms": 320,
+        "motion_tilt_deg": 0,     # наклон в сторону движения по горизонтали (минус — назад), 0 — выключен
         "motion_blur": True,
         "blur_length": 0.5,       # длина шлейфа в долях кадра (0.5 — затвор 180°)
         "blur_opacity": 1.0,      # плотность шлейфа
@@ -50,15 +51,16 @@ DEFAULTS = {
 _SM, _RC = DEFAULTS["smoothing"], DEFAULTS["render"]
 PRESET_KEYS = [("smoothing", k) for k in ("method", "stiffness", "damping_ratio", "click_pull_ms", "deadzone_px")] + \
               [("render", k) for k in ("click_animation", "click_scale", "click_tilt_deg", "click_ms",
-                                       "motion_blur", "blur_length", "blur_opacity")]
+                                       "motion_tilt_deg", "motion_blur", "blur_length", "blur_opacity")]
 PRESETS = {
     "standard": {k: (_SM | _RC)[k] for _, k in PRESET_KEYS},
     "light": {"method": "spring", "stiffness": 900, "damping_ratio": 1.0, "click_pull_ms": 100, "deadzone_px": 2,
               "click_animation": True, "click_scale": 0.9, "click_tilt_deg": 8, "click_ms": 260,
-              "motion_blur": True, "blur_length": 0.35, "blur_opacity": 0.8},
+              "motion_tilt_deg": 0, "motion_blur": True, "blur_length": 0.35, "blur_opacity": 0.8},
     "cinema": {"method": "spring", "stiffness": 180, "damping_ratio": 1.0, "click_pull_ms": 200, "deadzone_px": 4,
                "click_animation": True, "click_scale": 0.78, "click_tilt_deg": 18, "click_ms": 400,
-               "motion_blur": True, "blur_length": 0.9, "blur_opacity": 1.2},
+               "motion_tilt_deg": 0, "motion_blur": True, "blur_length": 0.9, "blur_opacity": 1.2},
+    "tilt": {k: (_SM | _RC)[k] for _, k in PRESET_KEYS} | {"motion_tilt_deg": 5},  # стандарт + наклон на ходу
     "clean": {k: (_SM | _RC)[k] for _, k in PRESET_KEYS} | {"click_animation": False, "motion_blur": False},
 }
 
