@@ -278,6 +278,7 @@ class LivePreview(tk.Canvas):
         self.pix, self.trail = {}, collections.deque(maxlen=45)
         self.mon, self.last_t, self.press_t, self.release_t, self.was_down = None, time.perf_counter(), -1e9, -1e9, False
         self.click_anim_t = -1e9  # когда последний раз играла анимация клика: после неё наклон возвращается плавно
+        self.tilt_deg = 0.0  # сглаженный угол наклона в движении
         self.handles = {wc.user32.LoadCursorW(None, cid): n for n, (cid, _) in wc.CURSORS.items()}
         self.sets, self.sig, self.sig_seen, self.sig_t = {}, None, None, 0
         self.pt, self.ci = W.POINT(), wc.CURSORINFO(cbSize=C.sizeof(wc.CURSORINFO))
@@ -407,8 +408,12 @@ class LivePreview(tk.Canvas):
         if level:
             self.click_anim_t = now
         (ta, xa), (tb, xb) = self.trail[max(0, len(self.trail) - 2)][:2], self.trail[-1][:2]
-        tilt = int(render.tilt_level((xb - xa) / max(tb - ta, 1e-3) / (mon["width"] * s), rc["motion_tilt_deg"],
-                                     (now - self.click_anim_t) * 1000))
+        target = float(render.tilt_angle((xb - xa) / max(tb - ta, 1e-3) / (mon["width"] * s), rc["motion_tilt_deg"],
+                                         (now - self.click_anim_t) * 1000,
+                                         render.ARROW_SLANT if name in render.UPRIGHT else 0.0))
+        # в реальном времени будущего не знаем — угол догоняет цель плавно (при рендере сглаживание без задержки)
+        self.tilt_deg += (target - self.tilt_deg) * (1 - math.exp(-steps / render.TILT_SMOOTH_MS))
+        tilt = 0 if level else round(self.tilt_deg / render.TILT_STEP_DEG)
         if rc["motion_blur"] and level == 0:
             alphas = render.ghost_alphas(rc)
             fps = self.app.last_fps or 30
@@ -1523,9 +1528,11 @@ class App:
         g, _ = self.section(r, "Курсор")
         self.slider(g, 0, "Размер", "render.cursor_scale", 0.5, 3, 0.05,
                     "1 — как в системе, с учётом масштаба экрана и масштаба захвата в сцене OBS.")
-        self.slider(g, 1, "Наклон в движении", "render.motion_tilt_deg", -15, 15, 1,
-                    "Градусы: на ходу курсор наклоняется в сторону движения (вправо — вправо), чем быстрее, тем "
-                    "сильнее; в покое ровный. Минус — назад, 0 — выключено.", fmt=lambda v: f"{v}°")
+        g, _ = self.section(r, "Наклон в движении")
+        self.slider(g, 0, "Угол", "render.motion_tilt_deg", -15, 15, 1,
+                    "Градусы от прямого положения. В покое стрелка как в Windows, на ходу выпрямляется и "
+                    "наклоняется в сторону движения (вправо — вправо). Минус — назад, 0 — выключено.",
+                    fmt=lambda v: f"{v}°")
         g, h = self.section(r, "Шлейф · motion blur")
         self.toggle_row(h, "включён", "render.motion_blur").pack(side="right")
         if self.accurate_blur():  # выдержка как на камере: 1/60 — курсор смазан за 1/60 с

@@ -67,9 +67,28 @@ def check_click_animation():
     held = render.click_curve(np.array([80, 1500, 2080, 2400]), 320, 2000)  # держали кнопку 2 с
     assert held[0] == 1 and held[1] == 1 and 0 < held[2] < 1 and held[3] == 0, ("удержание", held)
     assert render.click_curve(np.array(5000.0), 320, np.inf) == 1, "пока кнопка зажата — наклон держится"
-    lv = render.tilt_level(np.array([2.0, 0.1, 0, -2.0]), 5)  # ширин кадра в секунду
-    assert lv[0] == -render.TILT_STEPS and -render.TILT_STEPS < lv[1] < 0 and lv[2] == 0 and lv[3] == render.TILT_STEPS,         ("вправо — наклон вправо (по часовой), чем быстрее, тем сильнее", lv)
-    assert not render.tilt_level(np.array([2.0, -2.0]), 0).any(), "0° — наклон выключен"
+    v = np.array([2.0, 0.05, 0, -2.0])  # ширин кадра в секунду, плюс — вправо
+    deg = render.tilt_angle(v, 5)  # рука, I-beam: ровные — просто ±5°
+    assert abs(deg[0] + 5) < 0.1 and -1 < deg[1] < 0 and deg[2] == 0 and abs(deg[3] - 5) < 0.1, \
+        ("вправо — наклон вправо (по часовой), медленно — чуть-чуть", deg)
+    ramp = -render.tilt_angle(np.array([0.1, 0.3, 0.6, 1.2]), 5)
+    assert (np.diff(ramp) > 0.5).all() and 3 < ramp[2] < 4.5, ("наклон растёт со скоростью", ramp)
+    assert not render.tilt_angle(v, 0, slant=render.ARROW_SLANT).any(), "0° — наклон выключен, стрелка как в системе"
+    step = render.smooth_tilt(np.r_[np.zeros(60), np.full(60, -27.0)], 60)  # рывок с места: поворот плавный
+    assert np.abs(np.diff(step)).max() < 4 and abs(step[59] + step[60] + 27) < 1, ("сглаживание угла", step)
+    assert len(render.smooth_tilt(np.ones(3), 60)) == 3, "короткое видео"
+    # стрелка: в покое как в Windows (остриё скошено на 22.5°), на ходу — прямо вверх ±5° в сторону движения
+    big = wc.cursor_sprite("arrow", 512)  # мерить углы — на крупном: у 32 px на кончике пара пикселей
+
+    def axis(vel):  # куда смотрит остриё: биссектриса левого и правого края у кончика, ° (плюс — низ вправо)
+        k = round(float(render.tilt_angle(vel, 5, slant=render.ARROW_SLANT)) / render.TILT_STEP_DEG)
+        a = np.array(render.pose_sprite(*big, settings.DEFAULTS["render"], 0, k)[0].getchannel("A")) > 128
+        ys, xs = np.nonzero(a)
+        rows = np.arange(ys.min() + 3, ys.min() + (ys.max() - ys.min()) // 4)
+        sl = [np.polyfit(rows, [f(xs[ys == y]) for y in rows], 1)[0] for f in (np.min, np.max)]
+        return np.degrees(np.arctan(sl).mean())
+    rest, right, left = axis(0.0), axis(2.0), axis(-2.0)
+    assert abs(rest - 22.5) < 2 and abs(right + 5) < 2 and abs(left - 5) < 2, ("стрелка на ходу", rest, right, left)
     # точка клика (hotspot) остаётся на месте при повороте и сжатии
     a = np.zeros((40, 40, 4), np.uint8)
     a[8:13, 8:13] = a[30:33, 20:23] = 255  # метка на hotspot (10,10) и вторая — чтобы было что поворачивать
@@ -201,7 +220,11 @@ def check_accurate_blur():
             # наклон в движении: на ходу курсор (и шлейф) наклонён, в покое — тот же, что без наклона
             for ref, acc in ((G, False), (A, True)):
                 T = luma(acc, tilt=5)
-                bad = [n for n in still if (T[n] != ref[n]).any()]
+                # угол сглажен без задержки, как траектория: наклон начинается чуть раньше рывка и тает чуть позже
+                calm = [n for n in still if np.ptp(np.interp(np.linspace(tr["t"][n] - 250, tr["t"][n] + 250, 60),
+                                                             tg, sx)) < 0.5]
+                assert {10, 15, 30, 85} <= set(calm), calm
+                bad = [n for n in calm if (T[n] != ref[n]).any()]
                 assert not bad, ("наклон в покое", acc, bad)
                 assert all((T[n] != ref[n]).any() for n in (56, 58, 60)), ("на ходу нет наклона", acc)
     finally:

@@ -26,9 +26,12 @@ from i18n import t
 log = logging.getLogger("smooth")
 HIDE = -10000
 CLICK_STEPS = 16  # шагов анимации клика (0 — обычный курсор)
-TILT_STEPS = 5    # шагов наклона в движении в каждую сторону: при 5° — по градусу, на ходу ступенек не видно
-TILT_SPEED = 0.5  # ширин кадра в секунду по горизонтали: на этой скорости наклон — 3/4 от заданного
+TILT_STEP_DEG = 1.0  # шаг угла наклона в движении: поворот плавный, ступенек не видно, а спрайтов немного
+TILT_SPEED = 0.6  # ширин кадра в секунду по горизонтали: на этой скорости поворот — 3/4 от полного
+TILT_SMOOTH_MS = 70  # сглаживание угла по времени: поворачивается плавно, без рывков от толчков руки
 TILT_RAMP_MS = 150  # после анимации клика наклон возвращается за это время, а не скачком
+UPRIGHT = ("arrow", "busy", "help")  # стрелки: остриё скошено влево на 22.5° (левый край отвесный, правый — 45°)
+ARROW_SLANT = 22.5
 
 
 def click_curve(age_ms, duration_ms, press_ms=0):
@@ -58,19 +61,30 @@ def press_sprite(img, hot, scale, deg):
 
 
 def pose_sprite(big, big_hot, rc, lvl, tilt):
-    """Курсор из 4× спрайта: шаг анимации клика lvl и шаг наклона в движении tilt. Возвращает (картинка, hotspot)."""
+    """Курсор из 4× спрайта: шаг анимации клика lvl и наклон в движении tilt (в шагах TILT_STEP_DEG).
+    Возвращает (картинка, hotspot)."""
     p = lvl / (CLICK_STEPS - 1)
     return press_sprite(big, big_hot, (1 - (1 - rc["click_scale"]) * p) / 4,
-                        rc["click_tilt_deg"] * p + tilt * rc["motion_tilt_deg"] / TILT_STEPS)
+                        rc["click_tilt_deg"] * p + tilt * TILT_STEP_DEG)
 
 
-def tilt_level(v, max_deg, since_click_ms=np.inf):
-    """Шаг наклона в движении по скорости v (ширин кадра в секунду по горизонтали), −TILT_STEPS…TILT_STEPS:
-    плавно растёт со скоростью и упирается в заданный угол. Вправо — наклон вправо, то есть по часовой (минус).
+def tilt_angle(v, max_deg, since_click_ms=np.inf, slant=0.0):
+    """Угол наклона в движении, ° (плюс — против часовой), по скорости v (ширин кадра в секунду по горизонтали, плюс —
+    вправо). В покое курсор как в системе; на ходу скошенная стрелка (slant — её скос) выпрямляется и наклоняется на
+    max_deg в сторону движения: вправо — вправо. Поворот растёт со скоростью: медленно — чуть-чуть, быстро — полный.
     Во время анимации клика (since_click_ms = 0) наклона нет: клик сам поворачивает курсор, а пары «шаг клика ×
     шаг наклона» дали бы сотни спрайтов и рендер в 2–3 раза дольше. После неё наклон плавно возвращается."""
     w = np.clip(np.asarray(since_click_ms, float) / TILT_RAMP_MS, 0, 1) * bool(max_deg)
-    return np.round(-np.tanh(np.asarray(v) / TILT_SPEED) * TILT_STEPS * w).astype(int)
+    f = np.tanh(np.asarray(v) / TILT_SPEED) * w  # −1…1: насколько полно повернуть и в какую сторону
+    return -(np.abs(f) * slant + f * max_deg)
+
+
+def smooth_tilt(deg, fps):
+    """Угол по кадрам, сглаженный по времени гауссом (σ = TILT_SMOOTH_MS): без запаздывания, как траектория."""
+    s = TILT_SMOOTH_MS * fps / 1000
+    h = math.ceil(3 * s)
+    k = np.exp(-0.5 * (np.arange(-h, h + 1) / s) ** 2)
+    return np.convolve(deg, k / k.sum())[h:h + len(deg)]
 
 
 def ghost_tilt(k):
@@ -459,8 +473,10 @@ def render(video, log_path, cfg, progress=None, clip=None):
     ok = vis & np.r_[vis[1:], True] & np.r_[True, vis[:-1]]
     frames = np.arange(len(vis))
     since = (frames - np.maximum.accumulate(np.where(track["level"] > 0, frames, -len(vis)))) * 1000 / fps
-    track["tilt"] = np.where(ok, tilt_level(v, rc["motion_tilt_deg"], since), 0)
     types = lg["types"]
+    slant = np.isin(track["type"], [i for i, name in enumerate(types) if name in UPRIGHT]) * ARROW_SLANT
+    deg = smooth_tilt(np.where(ok, tilt_angle(v, rc["motion_tilt_deg"], since, slant), 0.0), fps)
+    track["tilt"] = np.where(vis & (track["level"] == 0), np.round(deg / TILT_STEP_DEG), 0).astype(int)
     used = sorted({types[k] for k in np.unique(track["type"][vis])} | {"arrow"}, key=types.index)
     poses = {(types[k], lvl, tl) for k, lvl, tl in zip(*(track[c][vis].tolist() for c in ("type", "level", "tilt")))}
     zoom = abs(kx * ky * (a * e - b * d)) ** 0.5  # во сколько раз захват увеличен на видео

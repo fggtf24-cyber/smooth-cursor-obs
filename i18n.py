@@ -176,11 +176,11 @@ EN.update({
     "Длительность": "Duration",
     "мс: первая четверть — нажатие, затем плавный возврат. Пока кнопка зажата, наклон держится.":
         "ms: the first quarter presses in, the rest eases back. The tilt holds while the button is down.",
-    "Курсор": "Cursor", "Размер": "Size", "Наклон в движении": "Lean in motion",
-    "Градусы: на ходу курсор наклоняется в сторону движения (вправо — вправо), чем быстрее, тем сильнее; в покое "
-    "ровный. Минус — назад, 0 — выключено.":
-        "Degrees: while moving, the cursor leans the way it goes (right means right), more at higher speed; upright "
-        "at rest. Negative leans back, 0 is off.",
+    "Курсор": "Cursor", "Размер": "Size", "Наклон в движении": "Lean in motion", "Угол": "Angle",
+    "Градусы от прямого положения. В покое стрелка как в Windows, на ходу выпрямляется и наклоняется в сторону "
+    "движения (вправо — вправо). Минус — назад, 0 — выключено.":
+        "Degrees from straight up. At rest the arrow looks as in Windows; while moving it straightens and leans the "
+        "way it goes (right means right). Negative leans back, 0 is off.",
     "1 — как в системе, с учётом масштаба экрана и масштаба захвата в сцене OBS.":
         "1 is the system size, adjusted for display scaling and the capture scale in the OBS scene.",
     "Шлейф · motion blur": "Trail · motion blur", "Длина": "Length",
