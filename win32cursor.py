@@ -213,6 +213,21 @@ class CursorLogger:
                 "samples": samples, "clicks": clicks}
 
 
+def running_exe(name):
+    """Полный путь запущенной программы с таким именем exe (без учёта регистра), иначе None."""
+    ids, got = (W.DWORD * 4096)(), W.DWORD()
+    C.windll.psapi.EnumProcesses(ids, C.sizeof(ids), C.byref(got))
+    for pid in ids[:got.value // 4]:
+        h = C.windll.kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if h:
+            buf, n = C.create_unicode_buffer(1024), W.DWORD(1024)
+            ok = C.windll.kernel32.QueryFullProcessImageNameW(h, 0, buf, C.byref(n))
+            C.windll.kernel32.CloseHandle(h)
+            if ok and buf.value.lower().endswith("\\" + name.lower()):
+                return buf.value
+    return None
+
+
 def cursor_base_size():
     """Базовый размер курсора при 100% (меняется в «Специальные возможности → Указатель мыши»)."""
     try:

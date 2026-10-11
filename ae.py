@@ -5,8 +5,6 @@
 Между ними — Bezier с касательными и скоростями из самого движения (влияние 1/3), как при ручной анимации: ключ можно
 сдвинуть, и движение останется плавным. Скрипт .jsx отправляем в запущенный AE (AfterFX.exe -r).
 """
-import ctypes as C
-import ctypes.wintypes as W
 import glob
 import json
 import logging
@@ -190,16 +188,9 @@ def export(video, log_path, cfg):
 
 def afterfx():
     """AfterFX.exe: запущенный (чтобы скрипт ушёл в него, а не в другую версию), иначе новейший установленный."""
-    k32, ids, got = C.windll.kernel32, (W.DWORD * 4096)(), W.DWORD()
-    C.windll.psapi.EnumProcesses(ids, C.sizeof(ids), C.byref(got))
-    for pid in ids[:got.value // 4]:
-        h = k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
-        if h:
-            buf, n = C.create_unicode_buffer(1024), W.DWORD(1024)
-            ok = k32.QueryFullProcessImageNameW(h, 0, buf, C.byref(n))
-            k32.CloseHandle(h)
-            if ok and buf.value.lower().endswith("\\afterfx.exe"):
-                return buf.value
+    running = wc.running_exe("AfterFX.exe")
+    if running:
+        return running
     found = sorted(glob.glob(os.path.expandvars(r"%ProgramFiles%\Adobe\Adobe After Effects *\Support Files\AfterFX.exe")))
     if not found:
         raise RuntimeError(t("After Effects не найден — установлен ли он?"))

@@ -15,6 +15,7 @@ import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import win32cursor as wc
 from i18n import t
 
 log = logging.getLogger("smooth")
@@ -23,9 +24,10 @@ PLUGIN = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent)) / "prem
 PLUGIN_VERSION = json.loads((PLUGIN / "manifest.json").read_text(encoding="utf-8"))["version"]
 UPIA = Path(os.environ.get("CommonProgramFiles", r"C:\Program Files\Common Files")) / \
     r"Adobe\Adobe Desktop Common\RemoteComponents\UPI\UnifiedPluginInstallerAgent\UnifiedPluginInstallerAgent.exe"
-WAIT_S = 15  # плагин не забрал задание за это время — подсказать, что проверить
+WAIT_S = 15  # плагин не забрал задание за это время: Premiere открыт — переставить плагин, нет — подсказать
 
 _jobs, _lock, _server, _next_id = [], threading.Lock(), None, [1]
+_reinstalled = threading.Event()  # переставляли ли плагин в этом сеансе — не чаще раза
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -81,9 +83,21 @@ def send(path, duration, sequence=None):
     log.info(t("Premiere: жду, когда заберёт %s…"), Path(path).name)
 
     def watch():
-        if not job["taken"].wait(WAIT_S):
-            log.warning(t("Premiere пока не забрал видео: он открыт, в нём открыта секвенция? Не помогает — "
-                          "перезапустите Premiere, видео дождётся."))
+        if job["taken"].wait(WAIT_S):
+            return
+        # Premiere открыт, а плагин не спрашивает заданий — удалили, отключили, переставили Creative Cloud:
+        # ставим заново (первая установка подхватывается без перезапуска)
+        if wc.running_exe("Adobe Premiere Pro.exe") and not _reinstalled.is_set():
+            _reinstalled.set()
+            log.warning(t("Premiere открыт, но плагин не отвечает — ставлю его заново…"))
+            try:
+                install()
+            except Exception as e:
+                return log.error(t("Плагин для Premiere не поставился: %s"), e)
+            if job["taken"].wait(WAIT_S):
+                return
+        log.warning(t("Premiere пока не забрал видео: он открыт? Не помогает — перезапустите Premiere, видео "
+                      "дождётся."))
 
     threading.Thread(target=watch, daemon=True).start()
 

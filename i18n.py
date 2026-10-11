@@ -262,9 +262,11 @@ EN.update({
     "Premiere: видео в секвенции «%s» с %s (V1)": "Premiere: video placed in sequence “%s” at %s (V1)",
     "Premiere не вставил видео: %s": "Premiere did not place the video: %s",
     "Premiere: жду, когда заберёт %s…": "Premiere: waiting for it to take %s…",
-    "Premiere пока не забрал видео: он открыт, в нём открыта секвенция? Не помогает — перезапустите Premiere, "
-    "видео дождётся.": "Premiere has not taken the video yet: is it open, with a sequence open? If that doesn't "
-                       "help, restart Premiere — the video will wait.",
+    "Premiere пока не забрал видео: он открыт? Не помогает — перезапустите Premiere, видео дождётся.":
+        "Premiere has not taken the video yet: is it open? If that doesn't help, restart Premiere — the video will "
+        "wait.",
+    "Premiere открыт, но плагин не отвечает — ставлю его заново…":
+        "Premiere is open but the plugin does not answer — reinstalling it…",
     "Нет установщика плагинов Adobe — установлен ли Creative Cloud?":
         "Adobe's plugin installer is missing — is Creative Cloud installed?",
     "установщик Adobe: {}": "Adobe installer: {}",
