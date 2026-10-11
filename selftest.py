@@ -80,8 +80,8 @@ def check_click_animation():
     # стрелка: в покое как в Windows (остриё скошено на 22.5°), на ходу — прямо вверх ±5° в сторону движения
     big = wc.cursor_sprite("arrow", 512)  # мерить углы — на крупном: у 32 px на кончике пара пикселей
 
-    def axis(vel):  # куда смотрит остриё: биссектриса левого и правого края у кончика, ° (плюс — низ вправо)
-        k = round(float(render.tilt_angle(vel, 5, slant=render.ARROW_SLANT)) / render.TILT_STEP_DEG)
+    def axis(vel, deg=5):  # куда смотрит остриё: биссектриса левого и правого края у кончика, ° (плюс — низ вправо)
+        k = round(float(render.tilt_angle(vel, deg, slant=render.ARROW_SLANT)) / render.TILT_STEP_DEG)
         a = np.array(render.pose_sprite(*big, settings.DEFAULTS["render"], 0, k)[0].getchannel("A")) > 128
         ys, xs = np.nonzero(a)
         rows = np.arange(ys.min() + 3, ys.min() + (ys.max() - ys.min()) // 4)
@@ -89,6 +89,8 @@ def check_click_animation():
         return np.degrees(np.arctan(sl).mean())
     rest, right, left = axis(0.0), axis(2.0), axis(-2.0)
     assert abs(rest - 22.5) < 2 and abs(right + 5) < 2 and abs(left - 5) < 2, ("стрелка на ходу", rest, right, left)
+    right, left = axis(2.0, -5), axis(-2.0, -5)  # минус — назад от позы Windows: вправо — остриё на 5° влево
+    assert abs(right - 27.5) < 2 and abs(left - 17.5) < 2, ("стрелка, наклон назад", right, left)
     # точка клика (hotspot) остаётся на месте при повороте и сжатии
     a = np.zeros((40, 40, 4), np.uint8)
     a[8:13, 8:13] = a[30:33, 20:23] = 255  # метка на hotspot (10,10) и вторая — чтобы было что поворачивать

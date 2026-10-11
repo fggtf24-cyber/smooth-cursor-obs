@@ -33,7 +33,7 @@ DEFAULTS = {
         "click_scale": 0.82,      # до какого масштаба сжимается при клике
         "click_tilt_deg": 15,     # наклон против часовой (минус — по часовой)
         "click_ms": 320,
-        "motion_tilt_deg": 0,     # наклон в сторону движения по горизонтали (минус — назад), 0 — выключен
+        "motion_tilt_deg": 0,     # наклон в сторону движения по горизонтали (минус — назад от позы Windows), 0 — выключен
         "motion_blur": True,
         "blur_length": 0.5,       # длина шлейфа в долях кадра (0.5 — затвор 180°)
         "blur_opacity": 1.0,      # плотность шлейфа
@@ -61,6 +61,7 @@ PRESETS = {
                "click_animation": True, "click_scale": 0.78, "click_tilt_deg": 18, "click_ms": 400,
                "motion_tilt_deg": 0, "motion_blur": True, "blur_length": 0.9, "blur_opacity": 1.2},
     "tilt": {k: (_SM | _RC)[k] for _, k in PRESET_KEYS} | {"motion_tilt_deg": 5},  # стандарт + наклон на ходу
+    "tilt_back": {k: (_SM | _RC)[k] for _, k in PRESET_KEYS} | {"motion_tilt_deg": -9},  # стандарт + наклон назад
     "clean": {k: (_SM | _RC)[k] for _, k in PRESET_KEYS} | {"click_animation": False, "motion_blur": False},
 }
 

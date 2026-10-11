@@ -576,6 +576,8 @@ class Onboarding(tk.Frame):
         brand.pack(side="left")
         app.lbl(brand, "Smooth Cursor", "brand").pack(anchor="w")
         app.lbl(brand, t("первая настройка"), "brand", MUTE).pack(anchor="w")
+        if app.cfg["ui"]["onboarded"]:  # уже настраивались — можно выйти, ничего не меняя
+            Btn(top, t("Закрыть"), self.destroy, small=True).pack(side="right", anchor="n", padx=(30, 0))
         app.lang_switch(top).pack(side="right", anchor="n", padx=(30, 0))
 
         bot = tk.Frame(page, bg=BG)
@@ -1420,7 +1422,7 @@ class App:
         self.tree.bind("<Double-1>", lambda e: self.open_selected(result=True))
 
     PRESET_NAMES = {"standard": "Стандарт", "light": "Лёгкий", "cinema": "Кино", "tilt": "С наклоном",
-                    "clean": "Без эффектов"}
+                    "tilt_back": "Наклон v2", "clean": "Без эффектов"}
 
     def accurate_blur(self):
         rc = self.cfg["render"]
@@ -1531,7 +1533,8 @@ class App:
         g, _ = self.section(r, "Наклон в движении")
         self.slider(g, 0, "Угол", "render.motion_tilt_deg", -15, 15, 1,
                     "Градусы от прямого положения. В покое стрелка как в Windows, на ходу выпрямляется и "
-                    "наклоняется в сторону движения (вправо — вправо). Минус — назад, 0 — выключено.",
+                    "наклоняется в сторону движения (вправо — вправо). Минус — назад от положения как в Windows, "
+                    "как от инерции (вправо — влево). 0 — выключено.",
                     fmt=lambda v: f"{v}°")
         g, h = self.section(r, "Шлейф · motion blur")
         self.toggle_row(h, "включён", "render.motion_blur").pack(side="right")

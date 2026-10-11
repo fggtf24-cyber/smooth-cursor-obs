@@ -62,7 +62,7 @@ EN = {
 EN.update({
     # --- онбординг ---
     "Далее": "Next", "Назад": "Back", "Начать работу": "Get started",
-    "первая настройка": "first-time setup", "ЯЗЫК": "LANGUAGE",
+    "первая настройка": "first-time setup", "ЯЗЫК": "LANGUAGE", "Закрыть": "Close",
     "Привет.\nНастроим?": "Hello.\nLet's set up.", "Подключим\nOBS.": "Connect\nOBS.",
     "Что\nзаписываем.": "What we\nrecord.", "Куда и чем\nсохранять.": "Where and\nhow to save.", "Готово.": "Done.",
     "Smooth Cursor записывает экран через OBS и делает курсор на видео плавным, как в Screen Studio: сглаживает "
@@ -156,7 +156,7 @@ EN.update({
     "Не удалось обновиться: %s": "Update failed: %s",
     "файл обновления повреждён (не совпала контрольная сумма)": "the update file is corrupted (checksum mismatch)",
     "Пресет": "Preset", "Стандарт": "Standard", "Лёгкий": "Light", "Кино": "Cinematic", "Без эффектов": "No effects",
-    "С наклоном": "Lean",
+    "С наклоном": "Lean", "Наклон v2": "Lean v2",
     "свой": "custom", "Меняет сглаживание и эффекты.\nДальше можно подстроить ползунками.":
         "Sets smoothing and effects.\nFine-tune with the sliders afterwards.",
     "Почти без задержки, сглаживает в основном медленные движения.": "Almost no delay, smooths mostly slow movements.",
@@ -178,9 +178,11 @@ EN.update({
         "ms: the first quarter presses in, the rest eases back. The tilt holds while the button is down.",
     "Курсор": "Cursor", "Размер": "Size", "Наклон в движении": "Lean in motion", "Угол": "Angle",
     "Градусы от прямого положения. В покое стрелка как в Windows, на ходу выпрямляется и наклоняется в сторону "
-    "движения (вправо — вправо). Минус — назад, 0 — выключено.":
+    "движения (вправо — вправо). Минус — назад от положения как в Windows, как от инерции (вправо — влево). "
+    "0 — выключено.":
         "Degrees from straight up. At rest the arrow looks as in Windows; while moving it straightens and leans the "
-        "way it goes (right means right). Negative leans back, 0 is off.",
+        "way it goes (right means right). Negative leans back from the Windows pose, like inertia (right means "
+        "left). 0 is off.",
     "1 — как в системе, с учётом масштаба экрана и масштаба захвата в сцене OBS.":
         "1 is the system size, adjusted for display scaling and the capture scale in the OBS scene.",
     "Шлейф · motion blur": "Trail · motion blur", "Длина": "Length",
