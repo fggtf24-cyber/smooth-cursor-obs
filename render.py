@@ -29,7 +29,7 @@ CLICK_STEPS = 16  # шагов анимации клика (0 — обычный
 TILT_STEP_DEG = 1.0  # шаг угла наклона в движении: поворот плавный, ступенек не видно, а спрайтов немного
 TILT_SPEED = 0.6  # ширин кадра в секунду по горизонтали: на этой скорости поворот — 3/4 от полного
 TILT_SMOOTH_MS = 70  # сглаживание угла по времени: поворачивается плавно, без рывков от толчков руки
-TILT_RAMP_MS = 150  # после анимации клика наклон возвращается за это время, а не скачком
+TILT_RAMP_MS = 200  # к анимации клика наклон сходит на нет и после неё возвращается за это время, без рывка
 
 
 def click_curve(age_ms, duration_ms, press_ms=0):
@@ -83,6 +83,20 @@ def smooth_tilt(deg, fps):
     h = math.ceil(3 * s)
     k = np.exp(-0.5 * (np.arange(-h, h + 1) / s) ** 2)
     return np.convolve(deg, k / k.sum())[h:h + len(deg)]
+
+
+def frame_tilt(v, ok, level, fps, right_deg, left_deg):
+    """Наклон по кадрам, в шагах TILT_STEP_DEG: tilt_angle по скорости v (там, где не ok, — 0), сглаженный по времени.
+    На кадрах анимации клика (level > 0) — 0: у клика свой поворот, а пары «шаг клика × шаг наклона» дали бы сотни
+    спрайтов. Рендер знает будущее, поэтому наклон плавно сходит на нет к клику и возвращается после него
+    (за TILT_RAMP_MS, по smoothstep) — без рывка даже при клике на полном ходу."""
+    n = np.arange(len(level))
+    click = np.asarray(level) > 0
+    before = n - np.maximum.accumulate(np.where(click, n, -len(n)))  # кадров после прошлого клика
+    after = np.minimum.accumulate(np.where(click, n, 2 * len(n))[::-1])[::-1] - n  # и до следующего
+    u = np.clip(np.minimum(before, after) * 1000 / fps / TILT_RAMP_MS, 0, 1)
+    deg = smooth_tilt(np.where(ok, tilt_angle(v, right_deg, left_deg), 0.0), fps) * u * u * (3 - 2 * u)
+    return np.round(deg / TILT_STEP_DEG).astype(int)
 
 
 def ghost_tilt(k):
@@ -470,11 +484,9 @@ def render(video, log_path, cfg, progress=None, clip=None):
     v = np.gradient(track["vx"]) * fps / info["w"] if len(vis) > 1 else np.zeros(len(vis))
     # там, где курсор появляется или пропадает, разница позиций — скачок, а не скорость
     ok = vis & np.r_[vis[1:], True] & np.r_[True, vis[:-1]]
-    frames = np.arange(len(vis))
-    since = (frames - np.maximum.accumulate(np.where(track["level"] > 0, frames, -len(vis)))) * 1000 / fps
     types = lg["types"]
-    deg = smooth_tilt(np.where(ok, tilt_angle(v, rc["motion_tilt_right_deg"], rc["motion_tilt_left_deg"], since), 0.0), fps)
-    track["tilt"] = np.where(vis & (track["level"] == 0), np.round(deg / TILT_STEP_DEG), 0).astype(int)
+    track["tilt"] = np.where(vis, frame_tilt(v, ok, track["level"], fps, rc["motion_tilt_right_deg"],
+                                             rc["motion_tilt_left_deg"]), 0)
     used = sorted({types[k] for k in np.unique(track["type"][vis])} | {"arrow"}, key=types.index)
     poses = {(types[k], lvl, tl) for k, lvl, tl in zip(*(track[c][vis].tolist() for c in ("type", "level", "tilt")))}
     zoom = abs(kx * ky * (a * e - b * d)) ** 0.5  # во сколько раз захват увеличен на видео

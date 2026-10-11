@@ -72,8 +72,9 @@ PRESETS = {
 
 def my_presets(cfg):
     """Свои пресеты по порядку сохранения (то, что не похоже на пресет, — правка конфига руками — пропускаем)."""
-    return [p for p in cfg.get("my_presets") or [] if isinstance(p, dict) and isinstance(p.get("name"), str)
-            and p["name"]]
+    mine = cfg.get("my_presets")
+    return [p for p in mine if isinstance(p, dict) and isinstance(p.get("name"), str) and p["name"]] \
+        if isinstance(mine, list) else []
 
 
 def presets(cfg):

@@ -198,6 +198,22 @@ class Slider(tk.Canvas):
         self.create_rectangle(x - 6, 5, x + 6, 17, fill=INK, outline=INK)
 
 
+def edit_keys(e):
+    """Ctrl+A/C/V/X в полях ввода в любой раскладке: Tk узнаёт их по латинской букве, а в русской раскладке
+    (Ctrl+Ф, Ctrl+М…) молчит. Ловим по коду клавиши; в латинской их уже обработал класс поля — не дублируем."""
+    ev = {65: "<<SelectAll>>", 67: "<<Copy>>", 86: "<<Paste>>", 88: "<<Cut>>"}.get(e.keycode)
+    if ev and isinstance(e.widget, (tk.Entry, tk.Text)) and e.keysym.lower() not in ("a", "c", "v", "x"):
+        e.widget.event_generate(ev)
+
+
+def click_focus(e):
+    """Клик мимо поля забирает у него фокус: в Tk рамки и подписи фокус сами не берут, и поле значения так и
+    оставалось в режиме ввода. Теперь фокус уходит туда, куда кликнули, — поле применяет значение."""
+    w = e.widget
+    if isinstance(w, tk.Misc) and not isinstance(w, (tk.Entry, tk.Text)) and w.winfo_exists():
+        w.focus_set()
+
+
 class Gauge(tk.Canvas):
     """Прогресс из клеток."""
 
@@ -411,9 +427,10 @@ class LivePreview(tk.Canvas):
         target = float(render.tilt_angle((xb - xa) / max(tb - ta, 1e-3) / (mon["width"] * s),
                                          rc["motion_tilt_right_deg"], rc["motion_tilt_left_deg"],
                                          (now - self.click_anim_t) * 1000))
-        # в реальном времени будущего не знаем — угол догоняет цель плавно (при рендере сглаживание без задержки)
+        # в реальном времени будущего не знаем — угол догоняет цель плавно (при рендере сглаживание без задержки);
+        # при клике цель 0: наклон не обрывается, а сходит на нет, поворот клика ложится поверх
         self.tilt_deg += (target - self.tilt_deg) * (1 - math.exp(-steps / render.TILT_SMOOTH_MS))
-        tilt = 0 if level else round(self.tilt_deg / render.TILT_STEP_DEG)
+        tilt = round(self.tilt_deg / render.TILT_STEP_DEG)
         if rc["motion_blur"] and level == 0:
             alphas = render.ghost_alphas(rc)
             fps = self.app.last_fps or 30
@@ -1013,6 +1030,8 @@ class App:
         self.holder_win = sc.create_window(0, 0, anchor="nw", window=self.holder)
         sc.bind("<Configure>", lambda e: self.fit_page())
         self.root.bind_all("<MouseWheel>", self.wheel)
+        self.root.bind_all("<Control-KeyPress>", edit_keys)
+        self.root.bind_all("<Button-1>", click_focus)
         page = tk.Frame(self.holder, bg=BG)  # «паспарту»: всё вписано в невидимую рамку с большими полями
         page.pack(fill="both", expand=True, padx=self.padx, pady=self.pady)
 
@@ -1320,18 +1339,26 @@ class App:
             w.bind("<Leave>", lambda e: self.show_caption(None), add="+")
 
     def slider(self, parent, row, text, path, lo, hi, step, hint="", live_hint=None, fmt=None):
-        """Строка: подпись | ползунок | значение. Пояснение — под превью при наведении."""
+        """Строка: подпись | ползунок | значение. Пояснение — под превью при наведении.
+        Значение можно вписать: клик по нему выделяет число, Enter или клик мимо — применить, Esc — отмена."""
         name = self.lbl(parent, t(text))
         name.grid(row=row, column=0, sticky="w", pady=3)
-        value = self.lbl(parent, "", "mono", INK, width=7, anchor="e")
+        bg = parent["bg"]
+        value = tk.Entry(parent, width=7, justify="right", relief="flat", bd=0, bg=bg, fg=INK, font=F["mono"],
+                         insertbackground=INK, selectbackground=INK, selectforeground=BG, highlightthickness=1,
+                         highlightbackground=bg, highlightcolor=INK)
         digits = max(0, -int(f"{step:e}".split("e")[1]))
         state = {"v": get(self.cfg, path)}
+
+        def show(text):
+            value.delete(0, "end")
+            value.insert(0, text)
 
         def changed(v, save=True):
             v = round(round(v / step) * step, digits)
             v = int(v) if float(step).is_integer() else v
             state["v"] = v
-            value.config(text=fmt(v) if fmt else f"{v:.{digits}f}")
+            show(fmt(v) if fmt else f"{v:.{digits}f}")
             if save and v != get(self.cfg, path):
                 put(self.cfg, path, v)
                 self.schedule_save()
@@ -1339,9 +1366,27 @@ class App:
                     self.show_caption(f"{caps(t(text))}  —  {live_hint(v)}")
             return v
 
+        def editing(_):  # число без единиц, целиком выделено — сразу вписывать новое
+            value.config(bg=FIELD)
+            show(f"{state['v']:.{digits}f}")
+            value.select_range(0, "end")
+            value.icursor("end")
+
+        def typed(_):  # вне диапазона — к краю ползунка; не число — как было
+            value.config(bg=bg)
+            num = "".join(c for c in value.get() if c in "0123456789.,-").replace(",", ".")
+            try:
+                s.set(float(num))
+            except ValueError:
+                changed(state["v"], save=False)
+
         s = Slider(parent, lo, hi, get(self.cfg, path), changed, step)
         s.grid(row=row, column=1, sticky="ew", padx=(0, 6))
         value.grid(row=row, column=2, sticky="e", padx=(4, 0))
+        value.bind("<FocusIn>", editing)
+        value.bind("<FocusOut>", typed)
+        value.bind("<Return>", lambda e: s.focus_set())
+        value.bind("<Escape>", lambda e: (show(f"{state['v']:.{digits}f}"), s.focus_set()))
         self.hint_on((name, s, value), text, (lambda: live_hint(state["v"])) if live_hint else hint)
         changed(get(self.cfg, path), save=False)
 
