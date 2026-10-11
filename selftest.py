@@ -265,6 +265,17 @@ def check_ae():
         c = ae.hermite(va, vb, out, inn, np.arange(b - a + 1) / (b - a), (b - a) / fps)
         assert np.abs(c - scale[a:b + 1]).max() <= ae.TOL_PCT + 1e-3, ("масштаб мимо", a, b)
     assert ae.value_keys(np.full(n, 100.0), fps, ae.TOL_PCT) == [(0, 100.0, 0.0, 0.0)], "без клика — один ключ"
+    # лишних нет: без любого промежуточного ключа кривая выходит из допуска (иначе его можно было бы удалить)
+    p, v = np.stack([tr["vx"], tr["vy"]], 1), np.stack([np.gradient(tr["vx"]), np.gradient(tr["vy"])], 1) * fps
+    tol = ae.TOL_PX + ae.TOL_MOVE * np.hypot(*v.T) / fps
+    tol[48] = min(tol[48], ae.TOL_CLICK)
+    ks = [k[0] for k in pos]
+    for a, m, b in zip(ks, ks[1:], ks[2:]):
+        c = ae.path_curve(p[a], p[b], v[a], v[b], np.arange(b - a + 1) / (b - a), (b - a) / fps)
+        assert c is None or (np.hypot(*(c - p[a:b + 1]).T) / tol[a:b + 1]).max() > 1, ("лишний ключ позиции", m)
+    for (a, va, _, oa), (m, *_), (b, vb, ib, _) in zip(keys, keys[1:], keys[2:]):
+        c = ae.hermite(va, vb, oa, ib, np.arange(b - a + 1) / (b - a), (b - a) / fps)
+        assert np.abs(c - scale[a:b + 1]).max() > ae.TOL_PCT, ("лишний ключ масштаба", m)
     print(f"after effects: ок, {len(pos)} ключей позиции и {len(keys)} масштаба на {n} кадров")
 
 

@@ -24,7 +24,8 @@ from i18n import t
 log = logging.getLogger("smooth")
 TOL_PX, TOL_DEG, TOL_PCT = 2.0, 1.0, 1.0  # допуск кривой AE: позиция (px на 1080p), поворот (°), масштаб (%)
 TOL_MOVE = 0.25  # в движении позиции — ещё четверть пути за кадр: на ходу сдвиг в пару пикселей не виден, а ключей
-# вдвое-втрое меньше; а в кадре клика ключ стоит всегда — там курсор точно на месте
+# вдвое-втрое меньше
+TOL_CLICK = 0.5  # в кадре клика курсор — точно в точке клика (px); стоит там и так — отдельного ключа не нужно
 SPRITE_X = 4  # курсор не меньше 4× размера (со Scale 25%), а в файле курсора есть крупнее — в его размере: в AE
 # его можно увеличить без мыла
 AE_VIDEO = (".mov", ".mp4", ".m4v")  # что AE открывает сам; остальное (mkv, flv, ts) — перепаковка в mp4 без пересжатия
@@ -54,8 +55,8 @@ def path_curve(p0, p1, v0, v1, w, T):
 
 def fit_keys(seeds, error, tol):
     """Кадры-ключи: seeds и ещё те, где ошибка кривой между соседними ключами больше tol (делим по худшему кадру),
-    потом лишние убираем: ключ не нужен, если кривая и без него в допуске. error(a, b) → ошибки кадров a..b или
-    None (такой отрезок нельзя)."""
+    потом лишние убираем, пока есть что: ключ не нужен, если кривая и без него в допуске. error(a, b) → ошибки кадров
+    a..b или None (такой отрезок нельзя)."""
     keys, todo = set(seeds), list(zip(seeds[:-1], seeds[1:]))
     while todo:
         a, b = todo.pop()
@@ -68,13 +69,16 @@ def fit_keys(seeds, error, tol):
         m = m if a < m < b else (a + b) // 2
         keys.add(m)
         todo += [(a, m), (m, b)]
-    ks, i = sorted(int(k) for k in keys), 1
-    while i < len(ks) - 1:
-        e = None if ks[i] in seeds else error(ks[i - 1], ks[i + 1])
-        if e is not None and e.max() <= tol:
-            del ks[i]
-        else:
-            i += 1
+    ks, changed = sorted(int(k) for k in keys), True
+    while changed:  # убрали ключ — соседи стали дальше, и уже проверенный мог стать лишним: ещё проход
+        changed, i = False, 1
+        while i < len(ks) - 1:
+            e = None if ks[i] in seeds else error(ks[i - 1], ks[i + 1])
+            if e is not None and e.max() <= tol:
+                del ks[i]
+                changed = True
+            else:
+                i += 1
     return ks
 
 
@@ -90,6 +94,7 @@ def position_keys(x, y, vis, clicks, fps, px=TOL_PX):
     p = np.stack([x, y], 1)
     v = np.gradient(p, axis=0) * fps if len(p) > 1 else np.zeros_like(p)
     tol = px + TOL_MOVE * np.hypot(*v.T) / fps
+    tol[sorted(clicks)] = np.minimum(tol[sorted(clicks)], TOL_CLICK)
     out = []
     for a, b in runs(vis):
         v[a], v[b] = (p[min(a + 1, b)] - p[a]) * fps, (p[b] - p[max(b - 1, a)]) * fps  # на краях — без чужих кадров
@@ -99,7 +104,7 @@ def position_keys(x, y, vis, clicks, fps, px=TOL_PX):
             c = path_curve(p[i], p[j], v[i], v[j], np.arange(j - i + 1) / (j - i), T)
             return None if c is None else np.hypot(*(c - p[i:j + 1]).T) / tol[i:j + 1]
 
-        ks = fit_keys(sorted({a, b} | {c for c in clicks if a <= c <= b}), error, 1.0)
+        ks = fit_keys([a, b], error, 1.0)
         for k, n in enumerate(ks):
             back = (n - ks[k - 1]) / fps if k else 0
             ahead = (ks[k + 1] - n) / fps if k + 1 < len(ks) else 0
