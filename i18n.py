@@ -217,7 +217,7 @@ EN.update({
     "Меньше — лучше и тяжелее файл; 18 — почти без потерь.":
         "Lower is better quality and bigger files; 18 is nearly lossless.",
     "Дополнительно": "Extras", "Отладка: поверх — реальный курсор (красный)": "Debug: draw the real cursor on top (red)",
-    "Траектория в CSV (Fusion / After Effects)": "Path to CSV (Fusion / After Effects)", "Обзор…": "Browse…",
+    "Траектория в CSV (для DaVinci Fusion)": "Path to CSV (for DaVinci Fusion)", "Обзор…": "Browse…",
     "Все": "All files",
     # --- OBS ---
     "Подключение": "Connection", "Адрес": "Host", "Порт": "Port", "Пароль": "Password", "Подключиться": "Connect",

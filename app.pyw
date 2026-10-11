@@ -1700,7 +1700,7 @@ class App:
         g, _ = self.section(l, "Дополнительно")
         self.toggle_row(g, "Отладка: поверх — реальный курсор (красный)", "render.debug_raw").grid(
             row=0, column=0, columnspan=3, sticky="w", pady=3)
-        self.toggle_row(g, "Траектория в CSV (Fusion / After Effects)", "render.export_keyframes").grid(
+        self.toggle_row(g, "Траектория в CSV (для DaVinci Fusion)", "render.export_keyframes").grid(
             row=1, column=0, columnspan=3, sticky="w", pady=3)
         g, _ = self.section(r, "ffmpeg")
         e, self.ffmpeg_var = self.entry(g, "render.ffmpeg", width=40)
