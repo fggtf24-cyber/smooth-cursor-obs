@@ -33,7 +33,8 @@ DEFAULTS = {
         "click_scale": 0.82,      # до какого масштаба сжимается при клике
         "click_tilt_deg": 15,     # наклон против часовой (минус — по часовой)
         "click_ms": 320,
-        "motion_tilt_deg": 0,     # наклон в сторону движения по горизонтали (минус — назад от позы Windows), 0 — выключен
+        "motion_tilt_right_deg": 0,  # поворот на ходу от позы Windows в сторону движения, °: едет вправо — вправо
+        "motion_tilt_left_deg": 0,   # едет влево — влево (минус — назад, как от инерции), 0 — выключен
         "motion_blur": True,
         "blur_length": 0.5,       # длина шлейфа в долях кадра (0.5 — затвор 180°)
         "blur_opacity": 1.0,      # плотность шлейфа
@@ -44,6 +45,7 @@ DEFAULTS = {
     },
     "ui": {"folder": "", "auto_render": True, "preview_start": 0.0, "preview_len": 5.0, "lang": "ru",
            "onboarded": False, "skip_version": ""},  # folder — папка записей OBS; skip_version — «не сейчас»
+    "my_presets": [],  # свои пресеты: [{"name": ..., значения PRESET_KEYS}], сохраняются из меню пресетов
 }
 
 
@@ -51,29 +53,54 @@ DEFAULTS = {
 _SM, _RC = DEFAULTS["smoothing"], DEFAULTS["render"]
 PRESET_KEYS = [("smoothing", k) for k in ("method", "stiffness", "damping_ratio", "click_pull_ms", "deadzone_px")] + \
               [("render", k) for k in ("click_animation", "click_scale", "click_tilt_deg", "click_ms",
-                                       "motion_tilt_deg", "motion_blur", "blur_length", "blur_opacity")]
+                                       "motion_tilt_right_deg", "motion_tilt_left_deg", "motion_blur", "blur_length",
+                                       "blur_opacity")]
 PRESETS = {
     "standard": {k: (_SM | _RC)[k] for _, k in PRESET_KEYS},
     "light": {"method": "spring", "stiffness": 900, "damping_ratio": 1.0, "click_pull_ms": 100, "deadzone_px": 2,
               "click_animation": True, "click_scale": 0.9, "click_tilt_deg": 8, "click_ms": 260,
-              "motion_tilt_deg": 0, "motion_blur": True, "blur_length": 0.35, "blur_opacity": 0.8},
+              "motion_tilt_right_deg": 0, "motion_tilt_left_deg": 0, "motion_blur": True, "blur_length": 0.35, "blur_opacity": 0.8},
     "cinema": {"method": "spring", "stiffness": 180, "damping_ratio": 1.0, "click_pull_ms": 200, "deadzone_px": 4,
                "click_animation": True, "click_scale": 0.78, "click_tilt_deg": 18, "click_ms": 400,
-               "motion_tilt_deg": 0, "motion_blur": True, "blur_length": 0.9, "blur_opacity": 1.2},
-    "tilt": {k: (_SM | _RC)[k] for _, k in PRESET_KEYS} | {"motion_tilt_deg": 5},  # стандарт + наклон на ходу
-    "tilt_back": {k: (_SM | _RC)[k] for _, k in PRESET_KEYS} | {"motion_tilt_deg": -9},  # стандарт + наклон назад
+               "motion_tilt_right_deg": 0, "motion_tilt_left_deg": 0, "motion_blur": True, "blur_length": 0.9, "blur_opacity": 1.2},
+    "tilt": {k: (_SM | _RC)[k] for _, k in PRESET_KEYS} | {"motion_tilt_right_deg": 72, "motion_tilt_left_deg": 27},  # вправо = 45 + влево: зеркально
+    "tilt_back": {k: (_SM | _RC)[k] for _, k in PRESET_KEYS} | {"motion_tilt_right_deg": -27,
+                                                                "motion_tilt_left_deg": -27},
     "clean": {k: (_SM | _RC)[k] for _, k in PRESET_KEYS} | {"click_animation": False, "motion_blur": False},
 }
 
 
+def my_presets(cfg):
+    """Свои пресеты по порядку сохранения (то, что не похоже на пресет, — правка конфига руками — пропускаем)."""
+    return [p for p in cfg.get("my_presets") or [] if isinstance(p, dict) and isinstance(p.get("name"), str)
+            and p["name"]]
+
+
+def presets(cfg):
+    """Встроенные пресеты, затем свои — под ключами «my:имя»."""
+    return PRESETS | {"my:" + p["name"]: p for p in my_presets(cfg)}
+
+
 def apply_preset(cfg, name):
+    p = presets(cfg)[name]
     for sec, k in PRESET_KEYS:
-        cfg[sec][k] = PRESETS[name][k]
+        cfg[sec][k] = p.get(k, DEFAULTS[sec][k])  # в своём, сохранённом старой версией, новых ключей может не быть
+
+
+def save_my_preset(cfg, name):
+    """Текущие настройки — в свой пресет: с новым именем добавляется в конец, с тем же — обновляется на месте."""
+    mine = my_presets(cfg)
+    i = next((i for i, p in enumerate(mine) if p["name"] == name), len(mine))
+    cfg["my_presets"] = mine[:i] + [{"name": name} | {k: cfg[sec][k] for sec, k in PRESET_KEYS}] + mine[i + 1:]
+
+
+def delete_my_preset(cfg, name):
+    cfg["my_presets"] = [p for p in my_presets(cfg) if p["name"] != name]
 
 
 def preset_of(cfg):
     """Имя пресета, с которым совпадают текущие настройки, иначе None (настроено вручную)."""
-    return next((n for n, p in PRESETS.items() if all(cfg[s][k] == p[k] for s, k in PRESET_KEYS)), None)
+    return next((n for n, p in presets(cfg).items() if all(cfg[s][k] == p.get(k) for s, k in PRESET_KEYS)), None)
 
 
 def _merge(base, over):
@@ -93,6 +120,8 @@ def load(path=PATH):
             cfg["ui"]["onboarded"] = True
     cfg["obs"].pop("profile", None)  # устарело: профиль OBS больше не переключается, берётся текущий
     cfg["smoothing"].pop("damping", None)  # устарело: теперь damping_ratio
+    if (tilt := cfg["render"].pop("motion_tilt_deg", None)) is not None:  # устарело: один угол на обе стороны
+        cfg["render"]["motion_tilt_right_deg"] = cfg["render"]["motion_tilt_left_deg"] = tilt
     off = cfg["sync"]["offset_ms"]
     if not isinstance(off, dict):  # старый формат — одно число
         cfg["sync"]["offset_ms"] = {30: off, 60: off, "default": off}

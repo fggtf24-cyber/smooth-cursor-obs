@@ -306,7 +306,7 @@ class LivePreview(tk.Canvas):
         Спрайты собираются по мере надобности — их сотни, а нужны единицы."""
         rc = self.app.cfg["render"]
         sig = (rc["click_scale"], rc["click_tilt_deg"], rc["blur_opacity"], rc["blur_length"], rc["cursor_scale"],
-               rc["motion_tilt_deg"])
+               rc["motion_tilt_right_deg"], rc["motion_tilt_left_deg"])
         now = time.perf_counter()
         if sig != self.sig:  # пересобрать спрайты, когда ползунок замер на 0.15 с (не на каждом шаге)
             if sig != self.sig_seen:
@@ -408,9 +408,9 @@ class LivePreview(tk.Canvas):
         if level:
             self.click_anim_t = now
         (ta, xa), (tb, xb) = self.trail[max(0, len(self.trail) - 2)][:2], self.trail[-1][:2]
-        target = float(render.tilt_angle((xb - xa) / max(tb - ta, 1e-3) / (mon["width"] * s), rc["motion_tilt_deg"],
-                                         (now - self.click_anim_t) * 1000,
-                                         render.ARROW_SLANT if name in render.UPRIGHT else 0.0))
+        target = float(render.tilt_angle((xb - xa) / max(tb - ta, 1e-3) / (mon["width"] * s),
+                                         rc["motion_tilt_right_deg"], rc["motion_tilt_left_deg"],
+                                         (now - self.click_anim_t) * 1000))
         # в реальном времени будущего не знаем — угол догоняет цель плавно (при рендере сглаживание без задержки)
         self.tilt_deg += (target - self.tilt_deg) * (1 - math.exp(-steps / render.TILT_SMOOTH_MS))
         tilt = 0 if level else round(self.tilt_deg / render.TILT_STEP_DEG)
@@ -1432,7 +1432,10 @@ class App:
         if hasattr(self, "preset_btn") and self.preset_btn.winfo_exists():
             cur = settings.preset_of(self.cfg)
             acc = " · " + t("точный блюр") if self.accurate_blur() else ""
-            self.preset_btn.set_text(f"{t('Пресет')}: {t(self.PRESET_NAMES[cur]) if cur else t('свой')}{acc}  ▾")
+            self.preset_btn.set_text(f"{t('Пресет')}: {self.preset_label(cur) if cur else t('свой')}{acc}  ▾")
+
+    def preset_label(self, key):
+        return key[3:] if key.startswith("my:") else t(self.PRESET_NAMES[key])  # своё имя — как есть
 
     def preset_menu(self):
         """Выпадающий список пресетов под кнопкой — в стиле программы, закрывается кликом мимо или Esc.
@@ -1444,35 +1447,79 @@ class App:
         box = tk.Frame(m, bg=BG)
         box.pack(padx=1, pady=1)
 
-        def item(marked, label, action):
+        def item(marked, label, action, delete=None):
             row = tk.Frame(box, bg=BG, cursor="hand2")
             row.pack(fill="x")
             mark = self.lbl(row, "■" if marked else "", "small", INK, width=2)
             mark.pack(side="left", padx=(10, 0), pady=7)
             lab = self.lbl(row, label, "body", INK, anchor="w", width=20)
             lab.pack(side="left", padx=(2, 14))
-            for w in (row, mark, lab):
+            parts = [row, mark, lab]
+            if delete:  # ✕ — со второго клика: первый спрашивает «удалить?»
+                x = self.lbl(row, "✕", "small", MUTE)
+                x.pack(side="right", padx=(0, 12))
+                x.bind("<Button-1>", lambda e: delete() if x["text"] != "✕" else x.config(text=t("удалить?"), fg=RED))
+                parts.append(x)
+            for w in parts:
                 w.bind("<Enter>", lambda e, r=row: [x.config(bg=HOVER) for x in (r, *r.winfo_children())])
                 w.bind("<Leave>", lambda e, r=row: [x.config(bg=BG) for x in (r, *r.winfo_children())])
+            for w in parts[:3]:
                 w.bind("<Button-1>", lambda e: (m.destroy(), action()))
 
-        for name, label in self.PRESET_NAMES.items():
-            item(name == cur, t(label), lambda n=name: self.pick_preset(n))
+        for name in self.PRESET_NAMES:
+            item(name == cur, self.preset_label(name), lambda n=name: self.pick_preset(n))
         self.lbl(box, t("Меняет сглаживание и эффекты.\nДальше можно подстроить ползунками."), "small", MUTE,
                  justify="left").pack(anchor="w", padx=12, pady=(4, 10))
+        tk.Frame(box, height=1, bg=RULE).pack(fill="x", padx=10)
+        # свои — отдельно от встроенных: заголовок, их список, а под ним поле с именем и чёрная кнопка
+        self.lbl(box, t("СВОИ ПРЕСЕТЫ"), "caps", INK).pack(anchor="w", padx=12, pady=(10, 2))
+        mine = [p["name"] for p in settings.my_presets(self.cfg)]
+        for name in mine:
+            item(cur == "my:" + name, name, lambda n=name: self.pick_preset("my:" + n),
+                 delete=lambda n=name: (m.destroy(), self.delete_my_preset(n)))
+        row = tk.Frame(box, bg=BG)
+        row.pack(anchor="w", padx=12, pady=(6, 0))
+        default = next(n for n in (t("Мой"), *(f"{t('Мой')} {i}" for i in range(2, 100))) if n not in mine)
+        my_name = tk.StringVar(value=cur[3:] if cur and cur.startswith("my:") else default)
+        name_box = tk.Entry(row, textvariable=my_name, width=18, relief="flat", bg=FIELD, fg=INK, insertbackground=INK,
+                            font=F["body"], highlightthickness=1, highlightbackground=LINE, highlightcolor=INK)
+        name_box.pack(side="left", ipady=3)
+        save = lambda: (m.destroy(), self.save_my_preset(my_name.get()))
+        Btn(row, t("Сохранить"), save, kind="primary", small=True).pack(side="left", padx=(8, 0))
+        name_box.bind("<Return>", lambda e: save())
+        self.lbl(box, t("Запомнит текущие сглаживание и эффекты.\nС тем же именем — обновит этот пресет."), "small",
+                 MUTE, justify="left").pack(anchor="w", padx=12, pady=(4, 10))
         tk.Frame(box, height=1, bg=RULE).pack(fill="x", padx=10)
         item(self.accurate_blur(), t("Точный motion blur"), self.toggle_accurate)
         self.lbl(box, t("Как у камеры: курсор смазан по всей выдержке,\nа не нарисован копиями. Цена: на быстрых "
                         "рывках\nрендер до 1,6× дольше, шлейф бледнее копий."), "small", MUTE,
                  justify="left").pack(anchor="w", padx=12, pady=(4, 10))
+
+        def focus_out(_):  # закрыть, когда фокус ушёл из меню совсем, а не в поле имени
+            def check():
+                if m.winfo_exists() and ((f := m.focus_get()) is None or f.winfo_toplevel() is not m):
+                    m.destroy()
+            m.after_idle(check)
+
         m.bind("<Escape>", lambda e: m.destroy())
-        m.bind("<FocusOut>", lambda e: m.destroy())
+        m.bind("<FocusOut>", focus_out)
         m.focus_force()
 
     def pick_preset(self, name):
         settings.apply_preset(self.cfg, name)
         settings.save(self.cfg)
         self.rebuild()  # ползунки показывают новые значения
+
+    def save_my_preset(self, name):
+        settings.save_my_preset(self.cfg, name.strip()[:24] or t("Мой"))
+        settings.save(self.cfg)
+        self.mark_preset()
+
+    def delete_my_preset(self, name):
+        settings.delete_my_preset(self.cfg, name)
+        settings.save(self.cfg)
+        self.mark_preset()
+        self.preset_menu()  # меню снова открыто — видно, что пресет ушёл
 
     def toggle_accurate(self):
         rc, on = self.cfg["render"], not self.accurate_blur()
@@ -1531,10 +1578,14 @@ class App:
         self.slider(g, 0, "Размер", "render.cursor_scale", 0.5, 3, 0.05,
                     "1 — как в системе, с учётом масштаба экрана и масштаба захвата в сцене OBS.")
         g, _ = self.section(r, "Наклон в движении")
-        self.slider(g, 0, "Угол", "render.motion_tilt_deg", -15, 15, 1,
-                    "Градусы от прямого положения. В покое стрелка как в Windows, на ходу выпрямляется и "
-                    "наклоняется в сторону движения (вправо — вправо). Минус — назад от положения как в Windows, "
-                    "как от инерции (вправо — влево). 0 — выключено.",
+        self.slider(g, 0, "Вправо", "render.motion_tilt_right_deg", -45, 90, 1,
+                    "На сколько градусов курсор поворачивается вправо от положения как в Windows, когда едет вправо. "
+                    "При 45° стрелка смотрит вправо так же, как в покое влево; на 45° больше, чем «Влево», — наклон "
+                    "зеркальный. Минус — назад, как от инерции. 0 — выключено.",
+                    fmt=lambda v: f"{v}°")
+        self.slider(g, 1, "Влево", "render.motion_tilt_left_deg", -45, 45, 1,
+                    "На сколько градусов курсор поворачивается влево от положения как в Windows, когда едет влево. "
+                    "Минус — назад, как от инерции. 0 — выключено.",
                     fmt=lambda v: f"{v}°")
         g, h = self.section(r, "Шлейф · motion blur")
         self.toggle_row(h, "включён", "render.motion_blur").pack(side="right")

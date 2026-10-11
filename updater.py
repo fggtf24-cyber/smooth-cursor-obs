@@ -5,7 +5,7 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
-VERSION = "1.2.4"
+VERSION = "1.2.5"
 REPO = "fggtf24-cyber/smooth-cursor-obs"
 ASSET = "SmoothCursor-Setup.exe"
 PAGE = f"https://github.com/{REPO}/releases/latest"

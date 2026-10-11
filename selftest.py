@@ -68,28 +68,30 @@ def check_click_animation():
     assert held[0] == 1 and held[1] == 1 and 0 < held[2] < 1 and held[3] == 0, ("удержание", held)
     assert render.click_curve(np.array(5000.0), 320, np.inf) == 1, "пока кнопка зажата — наклон держится"
     v = np.array([2.0, 0.05, 0, -2.0])  # ширин кадра в секунду, плюс — вправо
-    deg = render.tilt_angle(v, 5)  # рука, I-beam: ровные — просто ±5°
+    deg = render.tilt_angle(v, 5, 5)  # вправо — на 5° вправо, влево — на 5° влево
     assert abs(deg[0] + 5) < 0.1 and -1 < deg[1] < 0 and deg[2] == 0 and abs(deg[3] - 5) < 0.1, \
         ("вправо — наклон вправо (по часовой), медленно — чуть-чуть", deg)
-    ramp = -render.tilt_angle(np.array([0.1, 0.3, 0.6, 1.2]), 5)
+    ramp = -render.tilt_angle(np.array([0.1, 0.3, 0.6, 1.2]), 5, 5)
     assert (np.diff(ramp) > 0.5).all() and 3 < ramp[2] < 4.5, ("наклон растёт со скоростью", ramp)
-    assert not render.tilt_angle(v, 0, slant=render.ARROW_SLANT).any(), "0° — наклон выключен, стрелка как в системе"
+    assert not render.tilt_angle(v, 0, 0).any(), "0° — наклон выключен, курсор как в системе"
+    lr = render.tilt_angle(v, 10, 30)
+    assert abs(lr[0] + 10) < 0.1 and abs(lr[3] - 30) < 0.1, ("вправо и влево — свои углы", lr)
     step = render.smooth_tilt(np.r_[np.zeros(60), np.full(60, -27.0)], 60)  # рывок с места: поворот плавный
     assert np.abs(np.diff(step)).max() < 4 and abs(step[59] + step[60] + 27) < 1, ("сглаживание угла", step)
     assert len(render.smooth_tilt(np.ones(3), 60)) == 3, "короткое видео"
-    # стрелка: в покое как в Windows (остриё скошено на 22.5°), на ходу — прямо вверх ±5° в сторону движения
+    # стрелка: в покое как в Windows (остриё скошено на 22.5°), на ходу поворачивается на заданный угол в обе стороны
     big = wc.cursor_sprite("arrow", 512)  # мерить углы — на крупном: у 32 px на кончике пара пикселей
 
-    def axis(vel, deg=5):  # куда смотрит остриё: биссектриса левого и правого края у кончика, ° (плюс — низ вправо)
-        k = round(float(render.tilt_angle(vel, deg, slant=render.ARROW_SLANT)) / render.TILT_STEP_DEG)
+    def axis(vel, right=72, left=27):  # куда смотрит остриё: биссектриса левого и правого края у кончика, ° (плюс — низ вправо)
+        k = round(float(render.tilt_angle(vel, right, left)) / render.TILT_STEP_DEG)
         a = np.array(render.pose_sprite(*big, settings.DEFAULTS["render"], 0, k)[0].getchannel("A")) > 128
         ys, xs = np.nonzero(a)
         rows = np.arange(ys.min() + 3, ys.min() + (ys.max() - ys.min()) // 4)
         sl = [np.polyfit(rows, [f(xs[ys == y]) for y in rows], 1)[0] for f in (np.min, np.max)]
         return np.degrees(np.arctan(sl).mean())
-    rest, right, left = axis(0.0), axis(2.0), axis(-2.0)
-    assert abs(rest - 22.5) < 2 and abs(right + 5) < 2 and abs(left - 5) < 2, ("стрелка на ходу", rest, right, left)
-    right, left = axis(2.0, -5), axis(-2.0, -5)  # минус — назад от позы Windows: вправо — остриё на 5° влево
+    rest, right, left = axis(0.0), axis(2.0), axis(-2.0)  # «С наклоном» 72/27: вправо — зеркально тому, как влево
+    assert abs(rest - 22.5) < 2 and abs(right + 49.5) < 2 and abs(left - 49.5) < 2, ("стрелка на ходу", rest, right, left)
+    right, left = axis(2.0, -5, -5), axis(-2.0, -5, -5)  # минус — назад от позы Windows: вправо — остриё на 5° влево
     assert abs(right - 27.5) < 2 and abs(left - 17.5) < 2, ("стрелка, наклон назад", right, left)
     # точка клика (hotspot) остаётся на месте при повороте и сжатии
     a = np.zeros((40, 40, 4), np.uint8)
@@ -193,7 +195,7 @@ def check_accurate_blur():
 
             def luma(accurate, clip=None, tilt=0):  # яркость Y как есть (16 — чёрный)
                 c = copy.deepcopy(cfg)
-                c["render"].update(blur_accurate=accurate, motion_tilt_deg=tilt)
+                c["render"].update(blur_accurate=accurate, motion_tilt_right_deg=tilt, motion_tilt_left_deg=tilt)
                 out = render.render(video, lp, c, progress=lambda pct: False, clip=clip)
                 raw = subprocess.run([ff, "-v", "error", "-i", str(out), "-f", "rawvideo", "-pix_fmt", "yuv420p", "-"],
                                      capture_output=True, check=True).stdout
@@ -243,6 +245,22 @@ def check_presets():
         assert settings.preset_of(cfg) == name, name
     cfg["smoothing"]["stiffness"] += 10
     assert settings.preset_of(cfg) is None, "после ручной правки пресет не подсвечен"
+    settings.save_my_preset(cfg, "Обзор")
+    assert settings.preset_of(cfg) == "my:Обзор", "свой пресет узнаётся по имени"
+    settings.apply_preset(cfg, "standard")
+    settings.apply_preset(cfg, "my:Обзор")
+    assert cfg["smoothing"]["stiffness"] == settings.DEFAULTS["smoothing"]["stiffness"] + 10, "свой пресет применяется"
+    cfg["smoothing"]["stiffness"] += 10
+    settings.save_my_preset(cfg, "Туториал")
+    assert [p["name"] for p in settings.my_presets(cfg)] == ["Обзор", "Туториал"], "новое имя — добавляется"
+    settings.save_my_preset(cfg, "Обзор")
+    mine = settings.my_presets(cfg)
+    assert [p["name"] for p in mine] == ["Обзор", "Туториал"] and mine[0]["stiffness"] == cfg["smoothing"]["stiffness"], \
+        "то же имя — обновляется на месте"
+    settings.delete_my_preset(cfg, "Обзор")
+    assert [p["name"] for p in settings.my_presets(cfg)] == ["Туториал"], "удаление"
+    cfg["my_presets"] = ["мусор", {"name": ""}, {"name": 5}, None]
+    assert settings.my_presets(cfg) == [], "кривые записи в конфиге пропускаются"
     print("пресеты: ок")
 
 

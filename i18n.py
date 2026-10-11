@@ -156,7 +156,10 @@ EN.update({
     "Не удалось обновиться: %s": "Update failed: %s",
     "файл обновления повреждён (не совпала контрольная сумма)": "the update file is corrupted (checksum mismatch)",
     "Пресет": "Preset", "Стандарт": "Standard", "Лёгкий": "Light", "Кино": "Cinematic", "Без эффектов": "No effects",
-    "С наклоном": "Lean", "Наклон v2": "Lean v2",
+    "С наклоном": "Lean", "Наклон v2": "Lean v2", "Мой": "Mine", "СВОИ ПРЕСЕТЫ": "YOUR PRESETS", "удалить?": "delete?",
+    "Сохранить": "Save",
+    "Запомнит текущие сглаживание и эффекты.\nС тем же именем — обновит этот пресет.":
+        "Saves the current smoothing and effects.\nThe same name updates that preset.",
     "свой": "custom", "Меняет сглаживание и эффекты.\nДальше можно подстроить ползунками.":
         "Sets smoothing and effects.\nFine-tune with the sliders afterwards.",
     "Почти без задержки, сглаживает в основном медленные движения.": "Almost no delay, smooths mostly slow movements.",
@@ -176,13 +179,17 @@ EN.update({
     "Длительность": "Duration",
     "мс: первая четверть — нажатие, затем плавный возврат. Пока кнопка зажата, наклон держится.":
         "ms: the first quarter presses in, the rest eases back. The tilt holds while the button is down.",
-    "Курсор": "Cursor", "Размер": "Size", "Наклон в движении": "Lean in motion", "Угол": "Angle",
-    "Градусы от прямого положения. В покое стрелка как в Windows, на ходу выпрямляется и наклоняется в сторону "
-    "движения (вправо — вправо). Минус — назад от положения как в Windows, как от инерции (вправо — влево). "
-    "0 — выключено.":
-        "Degrees from straight up. At rest the arrow looks as in Windows; while moving it straightens and leans the "
-        "way it goes (right means right). Negative leans back from the Windows pose, like inertia (right means "
-        "left). 0 is off.",
+    "Курсор": "Cursor", "Размер": "Size", "Наклон в движении": "Lean in motion", "Вправо": "Right", "Влево": "Left",
+    "На сколько градусов курсор поворачивается вправо от положения как в Windows, когда едет вправо. При 45° "
+    "стрелка смотрит вправо так же, как в покое влево; на 45° больше, чем «Влево», — наклон зеркальный. Минус — "
+    "назад, как от инерции. 0 — выключено.":
+        "How many degrees the cursor turns right from its Windows pose when moving right. At 45° the arrow points "
+        "right just as it points left at rest; 45° more than Left makes the lean a mirror image. Negative leans "
+        "back, like inertia. 0 is off.",
+    "На сколько градусов курсор поворачивается влево от положения как в Windows, когда едет влево. Минус — назад, "
+    "как от инерции. 0 — выключено.":
+        "How many degrees the cursor turns left from its Windows pose when moving left. Negative leans back, like "
+        "inertia. 0 is off.",
     "1 — как в системе, с учётом масштаба экрана и масштаба захвата в сцене OBS.":
         "1 is the system size, adjusted for display scaling and the capture scale in the OBS scene.",
     "Шлейф · motion blur": "Trail · motion blur", "Длина": "Length",

@@ -30,8 +30,6 @@ TILT_STEP_DEG = 1.0  # шаг угла наклона в движении: по�
 TILT_SPEED = 0.6  # ширин кадра в секунду по горизонтали: на этой скорости поворот — 3/4 от полного
 TILT_SMOOTH_MS = 70  # сглаживание угла по времени: поворачивается плавно, без рывков от толчков руки
 TILT_RAMP_MS = 150  # после анимации клика наклон возвращается за это время, а не скачком
-UPRIGHT = ("arrow", "busy", "help")  # стрелки: остриё скошено влево на 22.5° (левый край отвесный, правый — 45°)
-ARROW_SLANT = 22.5
 
 
 def click_curve(age_ms, duration_ms, press_ms=0):
@@ -68,16 +66,15 @@ def pose_sprite(big, big_hot, rc, lvl, tilt):
                         rc["click_tilt_deg"] * p + tilt * TILT_STEP_DEG)
 
 
-def tilt_angle(v, max_deg, since_click_ms=np.inf, slant=0.0):
+def tilt_angle(v, right_deg, left_deg, since_click_ms=np.inf):
     """Угол наклона в движении, ° (плюс — против часовой), по скорости v (ширин кадра в секунду по горизонтали, плюс —
-    вправо). В покое курсор как в системе; на ходу скошенная стрелка (slant — её скос) выпрямляется и наклоняется на
-    max_deg в сторону движения: вправо — вправо. Минус — наклон назад от положения как в системе, без выпрямления:
-    вправо — остриё на |max_deg| влево, как от инерции. Поворот растёт со скоростью: медленно — чуть-чуть, быстро — полный.
-    Во время анимации клика (since_click_ms = 0) наклона нет: клик сам поворачивает курсор, а пары «шаг клика ×
-    шаг наклона» дали бы сотни спрайтов и рендер в 2–3 раза дольше. После неё наклон плавно возвращается."""
-    w = np.clip(np.asarray(since_click_ms, float) / TILT_RAMP_MS, 0, 1) * bool(max_deg)
-    f = np.tanh(np.asarray(v) / TILT_SPEED) * w  # −1…1: насколько полно повернуть и в какую сторону
-    return -(np.abs(f) * slant * (max_deg > 0) + f * max_deg)
+    вправо). В покое курсор как в системе; на ходу поворачивается от этого положения в сторону движения: вправо — на
+    right_deg, влево — на left_deg (у стрелки остриё скошено на 22.5°: при повороте на 22° вправо она смотрит прямо
+    вверх). Минус — назад, как от инерции: едет вправо — поворот влево. Поворот растёт со скоростью: медленно — чуть-чуть,
+    быстро — полный. Во время анимации клика (since_click_ms = 0) наклона нет: клик сам поворачивает курсор, а пары
+    «шаг клика × шаг наклона» дали бы сотни спрайтов и рендер в 2–3 раза дольше. После неё наклон плавно возвращается."""
+    f = np.tanh(np.asarray(v) / TILT_SPEED) * np.clip(np.asarray(since_click_ms, float) / TILT_RAMP_MS, 0, 1)
+    return -f * np.where(f > 0, right_deg, left_deg)  # f: −1…1 — насколько полно повернуть и в какую сторону
 
 
 def smooth_tilt(deg, fps):
@@ -89,9 +86,10 @@ def smooth_tilt(deg, fps):
 
 
 def ghost_tilt(k):
-    """Шаг наклона «призраков» шлейфа — через один: они бледные и сдвинуты назад, разницы в градус не видно, а слоёв
-    в ffmpeg вдвое меньше (каждый слой — время на каждом кадре)."""
-    return int(np.round(k / 2)) * 2
+    """Шаг наклона «призраков» шлейфа — каждый четвёртый: они бледные и сдвинуты назад, разницы в пару градусов не
+    видно, а слоёв в ffmpeg вчетверо меньше (каждый слой — время на каждом кадре; при наклоне 72/27 рендер в 1.3×
+    быстрее, чем с шагом 2)."""
+    return int(np.round(k / 4)) * 4
 
 
 def tilt_tag(k):
@@ -475,8 +473,7 @@ def render(video, log_path, cfg, progress=None, clip=None):
     frames = np.arange(len(vis))
     since = (frames - np.maximum.accumulate(np.where(track["level"] > 0, frames, -len(vis)))) * 1000 / fps
     types = lg["types"]
-    slant = np.isin(track["type"], [i for i, name in enumerate(types) if name in UPRIGHT]) * ARROW_SLANT
-    deg = smooth_tilt(np.where(ok, tilt_angle(v, rc["motion_tilt_deg"], since, slant), 0.0), fps)
+    deg = smooth_tilt(np.where(ok, tilt_angle(v, rc["motion_tilt_right_deg"], rc["motion_tilt_left_deg"], since), 0.0), fps)
     track["tilt"] = np.where(vis & (track["level"] == 0), np.round(deg / TILT_STEP_DEG), 0).astype(int)
     used = sorted({types[k] for k in np.unique(track["type"][vis])} | {"arrow"}, key=types.index)
     poses = {(types[k], lvl, tl) for k, lvl, tl in zip(*(track[c][vis].tolist() for c in ("type", "level", "tilt")))}
