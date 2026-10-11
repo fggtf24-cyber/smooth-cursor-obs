@@ -216,10 +216,6 @@ EN.update({
     "Качество (CQ)": "Quality (CQ)",
     "Меньше — лучше и тяжелее файл; 18 — почти без потерь.":
         "Lower is better quality and bigger files; 18 is nearly lossless.",
-    "Синхронизация с видео": "Sync with video", "Сдвиг · 30 fps": "Offset · 30 fps", "Сдвиг · 60 fps": "Offset · 60 fps",
-    "Другой fps": "Other fps",
-    "мс. Курсор опережает картинку — уменьшите, отстаёт — увеличьте. Проверять удобно с отладкой.":
-        "ms. Cursor ahead of the picture — decrease; behind — increase. Debug mode helps to check.",
     "Дополнительно": "Extras", "Отладка: поверх — реальный курсор (красный)": "Debug: draw the real cursor on top (red)",
     "Траектория в CSV (Fusion / After Effects)": "Path to CSV (Fusion / After Effects)", "Обзор…": "Browse…",
     "Все": "All files",

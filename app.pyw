@@ -1702,11 +1702,6 @@ class App:
             row=0, column=0, columnspan=3, sticky="w", pady=3)
         self.toggle_row(g, "Траектория в CSV (Fusion / After Effects)", "render.export_keyframes").grid(
             row=1, column=0, columnspan=3, sticky="w", pady=3)
-        g, _ = self.section(r, "Синхронизация с видео")
-        for i, (key, text) in enumerate(((30, "Сдвиг · 30 fps"), (60, "Сдвиг · 60 fps"), ("default", "Другой fps"))):
-            self.slider(g, i, text, f"sync.offset_ms.{key}", -200, 200, 1,
-                        "мс. Курсор опережает картинку — уменьшите, отстаёт — увеличьте. Проверять удобно с "
-                        "отладкой.", fmt=lambda v: f"{v:+d}")
         g, _ = self.section(r, "ffmpeg")
         e, self.ffmpeg_var = self.entry(g, "render.ffmpeg", width=40)
         e.grid(row=0, column=0, columnspan=2, sticky="ew", ipady=4)
