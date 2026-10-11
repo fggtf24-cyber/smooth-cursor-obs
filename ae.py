@@ -9,8 +9,10 @@
 import glob
 import json
 import logging
+import math
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -125,10 +127,22 @@ def value_keys(val, fps, tol, kinks=()):
             for n in fit_keys(sorted({0, len(val) - 1, *k.tolist()}), error, tol)]
 
 
+def changes(v):
+    """[(кадр, значение)] — только там, где значение меняется (ключи с удержанием)."""
+    n = np.r_[0, np.flatnonzero(np.diff(v)) + 1]
+    return [(int(i), int(v[i])) for i in n]
+
+
 def hold_keys(on):
     """Opacity с удержанием: 100, где on, 0 — где нет; ключи только на сменах."""
-    n = np.r_[0, np.flatnonzero(np.diff(on.astype(int))) + 1]
-    return [(int(i), 100 if on[i] else 0) for i in n]
+    return [(n, 100 * x) for n, x in changes(on.astype(int))]
+
+
+def recording_files(video):
+    """Файлы, по которым запись узнать в композиции AE: исходник, перепакованный mp4 и готовые с курсором (их —
+    подменить исходником). Возвращает (все, готовые)."""
+    baked = [str(video.with_name(video.stem + e)) for e in ("_smooth.mp4", "_smooth_debug.mp4")]
+    return [str(video), str(video.with_name(video.stem + "_ae") / (video.stem + ".mp4")), *baked], baked
 
 
 def blur_settings(rc, fps):
@@ -161,7 +175,7 @@ def export(video, log_path, cfg):
                 src.unlink(missing_ok=True)
                 raise RuntimeError(t("ffmpeg не смог перепаковать {}: {}").format(video.name, r.stderr.strip()[-300:]))
 
-    sprites = []  # первым — самый частый вид курсора: на его картинке все ключи, остальные к ней привязаны
+    sprites, kinds = [], []  # первым — самый частый вид курсора
     for k in np.argsort(-np.bincount(track["type"][vis], minlength=1), kind="stable"):
         if sprites and not (vis & (track["type"] == k)).any():
             break
@@ -170,8 +184,18 @@ def export(video, log_path, cfg):
         img, (hx, hy) = wc.cursor_sprite(name, px)
         png = out / f"cursor_{name}.png"
         img.save(png)
-        sprites.append({"type": name, "png": str(png), "hx": hx, "hy": hy, "scale": 100 * size / px,
-                        "opacity": hold_keys(vis & (track["type"] == k))})
+        sprites.append({"type": name, "png": str(png), "w": img.width, "h": img.height, "hx": hx, "hy": hy,
+                        "scale": 100 * size / px})
+        kinds.append(k)
+    # один слой курсора: несколько видов — прекомпозиция, кадр i — вид i, hotspot у всех в точке box[0:2];
+    # какой вид сейчас — Time Remap с удержанием (пока курсор не виден, вид прежний)
+    kind = np.select([track["type"] == k for k in kinds], range(len(kinds)), 0)
+    kind = kind[np.maximum.accumulate(np.where(vis, np.arange(len(vis)), 0))]  # вид последнего видимого кадра
+    r = [sp["scale"] / sprites[0]["scale"] for sp in sprites]  # плотность пикселей относительно основного вида
+    left, top = max(sp["hx"] * q for sp, q in zip(sprites, r)), max(sp["hy"] * q for sp, q in zip(sprites, r))
+    box = [round(left) + 2, round(top) + 2,
+           math.ceil(left + max((sp["w"] - sp["hx"]) * q for sp, q in zip(sprites, r))) + 4,
+           math.ceil(top + max((sp["h"] - sp["hy"]) * q for sp, q in zip(sprites, r))) + 4]
     age = track["click_age"]  # мс с нажатия; до первого — меньше нуля
     clicks = set((np.flatnonzero((age[1:] >= 0) & ((age[:-1] < 0) | (np.diff(age) < 0))) + 1).tolist())
     pos = position_keys(track["vx"], track["vy"], vis, clicks, fps, TOL_PX * max(1.0, info["h"] / 1080))
@@ -183,10 +207,10 @@ def export(video, log_path, cfg):
     scale = [(n, round(v * f, 4), round(a * f, 4), round(b * f, 4))
              for n, v, a, b in value_keys(100 * (1 - (1 - rc["click_scale"]) * track["press"]), fps, TOL_PCT, kinks)]
     angle, phase = blur_settings(rc, fps)
-    baked = [str(video.with_name(video.stem + e)) for e in ("_smooth.mp4", "_smooth_debug.mp4")]
+    same, baked = recording_files(video)
     data = {"name": f"Smooth Cursor — {video.stem}", "video": str(src), "w": info["w"], "h": info["h"], "fps": fps,
-            "same": [str(video), str(src), *baked], "baked": baked,
-            "frames": info["frames"], "sprites": sprites, "blur": rc["motion_blur"],
+            "same": same, "baked": baked, "frames": info["frames"], "sprites": sprites, "box": box,
+            "show": hold_keys(vis), "kind": changes(kind), "blur": rc["motion_blur"],
             "angle": angle, "phase": phase, "pos": pos, "rot": rot, "scl": scale}
     jsx = out / "import.jsx"
     jsx.write_text(JSX.replace("/*DATA*/", json.dumps(data)), encoding="utf-8-sig")  # с BOM — так AE читает UTF-8
@@ -212,28 +236,160 @@ def send(jsx):
     subprocess.Popen([afterfx(), "-s", f"$.evalFile(new File('{path}'))"], creationflags=render.CREATE_NO_WINDOW)
 
 
+def dispatch(videos, selected):
+    """Курсор — тем записям из списка, что уже лежат в открытой композиции AE (их import.jsx, подготовленный раньше:
+    кнопкой или при отправке в Premiere), а нет таких — выбранной. Какие там записи, решает скрипт в AE: ответить
+    программе AE не может без разрешения скриптам писать файлы. Запись в композиции без подготовленных слоёв —
+    AE скажет, какую выбрать."""
+    recs = []
+    for v in videos if selected in videos else [*videos, selected]:
+        jsx = v.with_name(v.stem + "_ae") / "import.jsx"
+        recs.append({"name": v.stem, "same": recording_files(v)[0], "jsx": str(jsx) if jsx.exists() else None})
+    script = DISPATCH.replace("/*RECS*/", json.dumps(recs)).replace("/*SEL*/", str([r["name"] for r in recs].index(selected.stem))).replace(
+        "/*MSG*/", json.dumps(t("В композиции есть записи, которые Smooth Cursor ещё не готовил для After Effects. "
+                                "Выберите их в программе и нажмите «→ After Effects» ещё раз:")))
+    path = Path(tempfile.gettempdir()) / "smooth_cursor_ae.jsx"
+    path.write_text(script, encoding="utf-8-sig")
+    send(path)
+
+
+DISPATCH = r"""(function () {
+var R = /*RECS*/, sel = /*SEL*/, comp = app.project.activeItem, run = [], missing = [], seen = {}, i, k, j;
+function file(L) {
+    try { return L.source.file.fsName.toLowerCase(); } catch (e) { return ""; }
+}
+for (i = 1; comp instanceof CompItem && i <= comp.numLayers; i++) {
+    var f = file(comp.layer(i));
+    for (k = 0; f && k < R.length; k++)
+        for (j = 0; j < R[k].same.length; j++)
+            if (!seen[k] && f == R[k].same[j].toLowerCase()) {
+                seen[k] = true;
+                if (R[k].jsx) run.push(R[k].jsx); else missing.push(R[k].name);
+            }
+}
+if (!run.length && !missing.length) run.push(R[sel].jsx);
+for (i = 0; i < run.length; i++) $.evalFile(new File(run[i]));
+if (missing.length) alert(/*MSG*/ + "\n\n" + missing.join("\n"));
+})();
+"""
+
+
 # Скрипт для AE (ExtendScript, ES3). D — данные из export(); всё — одним шагом отмены.
 JSX = r"""(function () {
 var D = /*DATA*/;
 app.beginUndoGroup("Smooth Cursor");
 try {
-    var comp = app.project.activeItem, fresh = !(comp instanceof CompItem);
-    var folder = app.project.items.addFolder(D.name);
+    var comp = app.project.activeItem, fresh = !(comp instanceof CompItem), folder = null, footage = null, cursor = null;
     function imp(path) {
+        if (!folder) folder = app.project.items.addFolder(D.name);
         var it = app.project.importFile(new ImportOptions(new File(path)));
         it.parentFolder = folder;
         return it;
     }
-    var dur = D.frames / D.fps;
+    function source() {  // исходник записи — один на все её фрагменты
+        return footage || (footage = imp(D.video));
+    }
+    function vec(prop, a, pad) {  // у 2D-слоя Position, Anchor и Scale — из трёх чисел: третье как есть (pad) или 0
+        var v = prop.value;
+        for (var i = a.length; i < v.length; i++) a.push(pad ? v[i] : 0);
+        return a;
+    }
+    function ease(prop, speed) {  // скорость по всем измерениям значения (у Position — одна, по пути)
+        var n = prop.isSpatial || !(prop.value instanceof Array) ? 1 : prop.value.length, a = [];
+        for (var i = 0; i < n; i++) a.push(new KeyframeEase(i < 2 ? speed : 0, 100 / 3));
+        return a;
+    }
+    // ключи: Position — [кадр, x, y, скорость, касательная до, после]; число — [кадр, значение, скорость до, после];
+    // at(кадр записи) — время в композиции, k — во сколько раз фрагмент медленнее записи (скорости — делим)
+    function keys(prop, K, value, at, k) {
+        var times = [], vals = [], i;
+        for (i = 0; i < K.length; i++) {
+            var v = value(K[i]);
+            times.push(at(K[i][0]));
+            vals.push(v instanceof Array ? vec(prop, v, true) : v);
+        }
+        if (K.length == 1) { prop.setValue(vals[0]); return; }
+        prop.setValuesAtTimes(times, vals);
+        for (i = 0; i < K.length; i++) {
+            var n = i + 1, sp = prop.isSpatial, din = K[i][sp ? 3 : 2] / k, dout = K[i][3] / k;
+            prop.setInterpolationTypeAtKey(n, KeyframeInterpolationType.BEZIER, KeyframeInterpolationType.BEZIER);
+            prop.setTemporalAutoBezierAtKey(n, false);  // скорости — наши, AE их не пересчитывает
+            prop.setTemporalContinuousAtKey(n, din == dout);
+            prop.setTemporalEaseAtKey(n, ease(prop, din), ease(prop, dout));
+            if (sp) {
+                prop.setSpatialAutoBezierAtKey(n, false);
+                prop.setSpatialContinuousAtKey(n, true);
+                prop.setSpatialTangentsAtKey(n, vec(prop, K[i][4]), vec(prop, K[i][5]));
+            }
+        }
+    }
+    function hold(prop, K, value, at) {  // ключи с удержанием: [кадр, значение]
+        if (K.length == 1) return prop.setValue(value(K[0][1]));
+        var ts = [], vs = [];
+        for (var i = 0; i < K.length; i++) { ts.push(at(K[i][0])); vs.push(value(K[i][1])); }
+        prop.setValuesAtTimes(ts, vs);
+        for (i = 1; i <= prop.numKeys; i++)
+            prop.setInterpolationTypeAtKey(i, KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD);
+    }
+    function cursorItem() {
+        // один вид курсора — сама картинка; несколько — прекомпозиция: кадр i — вид i, hotspot у всех в точке box
+        if (cursor) return cursor;
+        if (D.sprites.length == 1) return cursor = imp(D.sprites[0].png);
+        var m = D.sprites[0];
+        cursor = app.project.items.addComp(D.name + " · cursor", D.box[2], D.box[3], 1, D.sprites.length / D.fps, D.fps);
+        for (var i = 0; i < D.sprites.length; i++) {
+            var s = D.sprites[i], C = cursor.layers.add(imp(s.png)), ct = C.transform, q = 100 * s.scale / m.scale;
+            C.name = s.type;
+            C.startTime = i / D.fps;
+            C.outPoint = (i + 1) / D.fps;
+            ct.anchorPoint.setValue(vec(ct.anchorPoint, [s.hx, s.hy], true));
+            ct.position.setValue(vec(ct.position, [D.box[0], D.box[1]], true));
+            ct.scale.setValue(vec(ct.scale, [q, q], true));
+        }
+        cursor.parentFolder = folder;
+        return cursor;
+    }
+    // Курсор на фрагмент видео: один слой, ключи движения — прямо на нём. Время — по слою видео: где кадр 0
+    // записи, во сколько раз фрагмент ускорен или замедлен; видим там же, где видео (обрезанное — тоже)
+    function addCursor(video) {
+        var t0 = video.startTime, k = video.stretch / 100, multi = D.sprites.length > 1, m = D.sprites[0];
+        function at(n) { return t0 + n / D.fps * k; }
+        var L = comp.layers.add(cursorItem()), lt = L.transform;
+        L.name = "Smooth Cursor";
+        if (multi) L.timeRemapEnabled = true;  // прекомпозиция короче видео: с Time Remap слой тянется сколько нужно
+        L.startTime = video.inPoint;  // сначала время слоя: сдвиг начала сдвигает и ключи
+        L.inPoint = video.inPoint;
+        L.outPoint = video.outPoint;
+        if (multi) {  // какой вид курсора — кадр прекомпозиции (середина кадра — без промаха)
+            var tr = L.property("ADBE Time Remapping"), ts = [], vs = [], j, q;
+            for (j = 0; j < D.kind.length; j++) { ts.push(at(D.kind[j][0])); vs.push((D.kind[j][1] + 0.5) / D.fps); }
+            tr.setValuesAtTimes(ts, vs);
+            for (j = tr.numKeys; j >= 1; j--) {  // ключи AE от включения — убрать после своих: без ключей Remap выключится
+                for (q = 0; q < ts.length && Math.abs(tr.keyTime(j) - ts[q]) > 1e-4; q++) {}
+                if (q == ts.length) tr.removeKey(j);
+            }
+            for (j = 1; j <= tr.numKeys; j++)
+                tr.setInterpolationTypeAtKey(j, KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD);
+        }
+        L.moveBefore(video);
+        L.parent = video;  // координаты — в пикселях видео: двигаете или масштабируете видео — курсор с ним
+        lt.anchorPoint.setValue(vec(lt.anchorPoint, multi ? [D.box[0], D.box[1]] : [m.hx, m.hy], true));
+        if (D.pos.length) keys(lt.position, D.pos, function (q) { return [q[1], q[2]]; }, at, k);
+        keys(lt.rotation, D.rot, function (q) { return q[1]; }, at, k);
+        keys(lt.scale, D.scl, function (q) { return [q[1], q[1]]; }, at, k);
+        hold(lt.opacity, D.show, function (v) { return v; }, at);
+        L.motionBlur = D.blur;
+    }
+
     if (fresh) {  // нет открытой композиции — новая по записи, размытие как в программе
-        comp = app.project.items.addComp(D.name, D.w, D.h, 1, dur, D.fps);
-        comp.parentFolder = folder;
+        comp = app.project.items.addComp(D.name, D.w, D.h, 1, D.frames / D.fps, D.fps);
         comp.shutterAngle = D.angle;
         comp.shutterPhase = D.phase;
         comp.openInViewer();
     }
-    // эта запись уже в композиции (Dynamic Link из Premiere: Replace with After Effects Composition) — курсор к ней:
-    // готовое видео со вшитым курсором подменяем исходником, а время, обрезку и положение слоя не трогаем
+    // фрагменты этой записи, что уже в композиции (Dynamic Link из Premiere: Replace with After Effects Composition):
+    // каждый становится двумя слоями — исходник (вместо готового со вшитым курсором) и курсор; обрезка, время,
+    // скорость и положение — как были. Нет таких — запись целиком от текущего времени
     function file(L) {
         try { return L.source.file.fsName.toLowerCase(); } catch (e) { return ""; }
     }
@@ -241,81 +397,18 @@ try {
         for (var i = 0; i < list.length; i++) if (f && f == list[i].toLowerCase()) return true;
         return false;
     }
-    var video = null;
-    for (var i = 1; !fresh && !video && i <= comp.numLayers; i++) if (among(file(comp.layer(i)), D.same)) video = comp.layer(i);
-    if (video && among(file(video), D.baked)) video.replaceSource(imp(D.video), false);
-    if (!video) {
-        video = comp.layers.add(imp(D.video));
-        video.startTime = fresh ? 0 : comp.time;
+    var videos = [], i;
+    for (i = 1; !fresh && i <= comp.numLayers; i++) if (among(file(comp.layer(i)), D.same)) videos.push(comp.layer(i));
+    if (!videos.length) {
+        var v = comp.layers.add(source());
+        v.startTime = fresh ? 0 : comp.time;
+        videos.push(v);
     }
-    var t0 = video.startTime;  // кадр 0 записи — в этот момент композиции
-    function vec(prop, a, pad) {  // у 2D-слоя Position, Anchor и Scale — из трёх чисел: третье как есть (pad) или 0
-        var v = prop.value;
-        for (var i = a.length; i < v.length; i++) a.push(pad ? v[i] : 0);
-        return a;
+    for (i = 0; i < videos.length; i++) {
+        if (among(file(videos[i]), D.baked)) videos[i].replaceSource(source(), false);
+        addCursor(videos[i]);
     }
-
-    function ease(prop, speed) {  // скорость по всем измерениям значения (у Position — одна, по пути)
-        var n = prop.isSpatial || !(prop.value instanceof Array) ? 1 : prop.value.length, a = [];
-        for (var i = 0; i < n; i++) a.push(new KeyframeEase(i < 2 ? speed : 0, 100 / 3));
-        return a;
-    }
-    // ключи: Position — [кадр, x, y, скорость, касательная до, после]; число — [кадр, значение, скорость до, после]
-    function keys(prop, K, value) {
-        var times = [], vals = [], i;
-        for (i = 0; i < K.length; i++) {
-            var v = value(K[i]);
-            times.push(t0 + K[i][0] / D.fps);
-            vals.push(v instanceof Array ? vec(prop, v, true) : v);
-        }
-        if (K.length == 1) { prop.setValue(vals[0]); return; }
-        prop.setValuesAtTimes(times, vals);
-        for (i = 0; i < K.length; i++) {
-            var k = i + 1, sp = prop.isSpatial, din = K[i][sp ? 3 : 2], dout = K[i][3];
-            prop.setInterpolationTypeAtKey(k, KeyframeInterpolationType.BEZIER, KeyframeInterpolationType.BEZIER);
-            prop.setTemporalAutoBezierAtKey(k, false);  // скорости — наши, AE их не пересчитывает
-            prop.setTemporalContinuousAtKey(k, din == dout);
-            prop.setTemporalEaseAtKey(k, ease(prop, din), ease(prop, dout));
-            if (sp) {
-                prop.setSpatialAutoBezierAtKey(k, false);
-                prop.setSpatialContinuousAtKey(k, true);
-                prop.setSpatialTangentsAtKey(k, vec(prop, K[i][4]), vec(prop, K[i][5]));
-            }
-        }
-    }
-    // по слою на вид курсора, видим только свой — Opacity с удержанием. Ключи движения — прямо на картинке самого
-    // частого вида (первая); остальные привязаны к ней: hotspot в hotspot, правите её — они повторяют
-    var main = null, m = D.sprites[0];
-    for (var i = 0; i < D.sprites.length; i++) {
-        var s = D.sprites[i], L = comp.layers.add(imp(s.png)), lt = L.transform;
-        L.startTime = video.inPoint;  // курсор — там же, где видео (обрезанное в Premiere — тоже)
-        L.inPoint = video.inPoint;
-        L.outPoint = video.outPoint;
-        L.moveBefore(video);
-        L.parent = main || video;  // координаты — в пикселях видео: двигаете или масштабируете видео — курсор с ним
-        lt.anchorPoint.setValue(vec(lt.anchorPoint, [s.hx, s.hy], true));
-        if (!main) {
-            main = L;
-            L.name = "Smooth Cursor";
-            if (D.pos.length) keys(lt.position, D.pos, function (k) { return [k[1], k[2]]; });
-            keys(lt.rotation, D.rot, function (k) { return k[1]; });
-            keys(lt.scale, D.scl, function (k) { return [k[1], k[1]]; });
-        } else {
-            L.name = "Cursor " + s.type;
-            lt.position.setValue(vec(lt.position, [m.hx, m.hy], true));
-            lt.scale.setValue(vec(lt.scale, [100 * s.scale / m.scale, 100 * s.scale / m.scale], true));
-            lt.rotation.setValue(0);
-        }
-        L.motionBlur = D.blur;
-        var op = lt.opacity, ts = [], vs = [];
-        for (var j = 0; j < s.opacity.length; j++) { ts.push(t0 + s.opacity[j][0] / D.fps); vs.push(s.opacity[j][1]); }
-        if (ts.length == 1) op.setValue(vs[0]);
-        else {
-            op.setValuesAtTimes(ts, vs);
-            for (j = 1; j <= op.numKeys; j++)
-                op.setInterpolationTypeAtKey(j, KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD);
-        }
-    }
+    if (fresh) comp.parentFolder = folder;
     if (D.blur) comp.motionBlur = true;  // переключатель «Enable Motion Blur» у композиции
 } catch (e) {
     alert("Smooth Cursor: " + e.toString() + (e.line ? " (line " + e.line + ")" : ""));

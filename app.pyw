@@ -2001,17 +2001,28 @@ class App:
             subprocess.Popen(["explorer", "/select,", str(out if out.exists() else video)])
 
     def ae_selected(self):
-        """Выбранная запись — в After Effects. В первый раз — окно о том, куда лягут слои."""
+        """В After Effects. Записи из списка, что уже лежат в открытой композиции (Dynamic Link), найдёт сам скрипт;
+        нет таких — выбранная запись. В первый раз — окно о том, куда лягут слои."""
         sel = self.selected()[:1]
         if sel and self.cfg["ui"]["ae_intro"]:
-            threading.Thread(target=self._ae, args=sel[0], daemon=True).start()
+            threading.Thread(target=self._ae, args=(*sel[0], self.recordings()), daemon=True).start()
         elif sel:
             self.ae_intro(sel[0])
 
-    def _ae(self, video, log_path):
+    def recordings(self):
+        """Исходные видео всех записей списка (без исходника — пропускаем)."""
+        out = []
+        for iid in self.tree.get_children():
+            try:
+                out.append(rerender_paths([iid])[0])
+            except FileNotFoundError:
+                pass
+        return out
+
+    def _ae(self, video, log_path, videos):
         try:
             jsx, (angle, phase), _ = ae.export(video, log_path, self.cfg)
-            ae.send(jsx)
+            ae.dispatch(videos, video)
             if self.cfg["render"]["motion_blur"]:
                 log.info(t("After Effects: размытие включено у слоёв курсора и композиции. Как в программе — "
                            "Composition Settings → Advanced: Shutter Angle %d°, Shutter Phase %d°"), angle, phase)
@@ -2096,6 +2107,10 @@ class App:
 
     def _to_premiere(self, out):
         premiere.send(out, render.probe(render.tool(self.cfg["render"]["ffmpeg"], "ffprobe"), out)["duration"])
+        try:  # слои для AE — заранее: после Dynamic Link кнопка «→ After Effects» найдёт эту запись сама
+            ae.export(*rerender_paths([str(out)]), self.cfg)
+        except Exception as e:
+            log.warning(t("After Effects: %s"), e)
 
     def enqueue(self, video, log_path, clip=None, then=None):
         """then(готовое видео) — после рендера, в потоке рендера."""

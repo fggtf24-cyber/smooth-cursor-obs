@@ -258,6 +258,9 @@ EN.update({
     "After Effects: %d ключей позиции на %d кадров, слои в %s": "After Effects: %d position keys for %d frames, "
                                                                 "layers in %s",
     "After Effects не найден — установлен ли он?": "After Effects not found — is it installed?",
+    "В композиции есть записи, которые Smooth Cursor ещё не готовил для After Effects. Выберите их в программе и "
+    "нажмите «→ After Effects» ещё раз:": "The composition has recordings Smooth Cursor has not prepared for After "
+                                         "Effects yet. Select them in the app and press “→ After Effects” again:",
     # --- Premiere ---
     "Premiere: видео в секвенции «%s» с %s (V1)": "Premiere: video placed in sequence “%s” at %s (V1)",
     "Premiere не вставил видео: %s": "Premiere did not place the video: %s",
