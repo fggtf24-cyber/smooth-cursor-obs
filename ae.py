@@ -1,9 +1,10 @@
 """After Effects: запись и курсор отдельными слоями в открытую композицию.
 
-Курсор — картинки системных курсоров на null-слое «Smooth Cursor», привязанном к видео. Ключи — не на каждом кадре,
+Курсор — картинка системного курсора «Smooth Cursor», привязанная к видео, ключи — прямо на ней; другие виды
+курсора (текстовый, рука) привязаны к ней и повторяют её движение. Ключи — не на каждом кадре,
 а только там, где без них кривая AE отошла бы от траектории дальше допуска: на остановках, кликах и изгибах пути.
 Между ними — Bezier с касательными и скоростями из самого движения (влияние 1/3), как при ручной анимации: ключ можно
-сдвинуть, и движение останется плавным. Скрипт .jsx отправляем в запущенный AE (AfterFX.exe -r).
+сдвинуть, и движение останется плавным. Скрипт .jsx отправляем в запущенный AE (AfterFX.exe -s).
 """
 import glob
 import json
@@ -160,8 +161,10 @@ def export(video, log_path, cfg):
                 src.unlink(missing_ok=True)
                 raise RuntimeError(t("ffmpeg не смог перепаковать {}: {}").format(video.name, r.stderr.strip()[-300:]))
 
-    sprites = []
-    for k in sorted(set(track["type"][vis].tolist())) or [0]:
+    sprites = []  # первым — самый частый вид курсора: на его картинке все ключи, остальные к ней привязаны
+    for k in np.argsort(-np.bincount(track["type"][vis], minlength=1), kind="stable"):
+        if sprites and not (vis & (track["type"] == k)).any():
+            break
         name = types[k] if k < len(types) else "arrow"
         px = max(size * SPRITE_X, wc.cursor_file_max(name))
         img, (hx, hy) = wc.cursor_sprite(name, px)
@@ -175,7 +178,10 @@ def export(video, log_path, cfg):
     kinks = [c - 1 for c in clicks]
     # в AE поворот плюс — по часовой, у нас — против
     rot = value_keys(-(rc["click_tilt_deg"] * track["press"] + track["tilt_deg"]), fps, TOL_DEG, kinks)
-    scale = value_keys(100 * (1 - (1 - rc["click_scale"]) * track["press"]), fps, TOL_PCT, kinks)
+    # масштаб подбираем от 100%, а на картинку ставим от её Scale (крупный PNG уменьшен): допуск — в процентах размера
+    f = sprites[0]["scale"] / 100
+    scale = [(n, round(v * f, 4), round(a * f, 4), round(b * f, 4))
+             for n, v, a, b in value_keys(100 * (1 - (1 - rc["click_scale"]) * track["press"]), fps, TOL_PCT, kinks)]
     angle, phase = blur_settings(rc, fps)
     data = {"name": f"Smooth Cursor — {video.stem}", "video": str(src), "w": info["w"], "h": info["h"], "fps": fps,
             "frames": info["frames"], "sprites": sprites, "blur": rc["motion_blur"],
@@ -227,17 +233,11 @@ try {
     var t0 = fresh ? 0 : comp.time;
     var video = comp.layers.add(footage);
     video.startTime = t0;
-    var nul = comp.layers.addNull(dur);
-    nul.name = "Smooth Cursor";
-    nul.startTime = t0;
-    nul.parent = video;  // координаты курсора — в пикселях видео: двигаете или масштабируете видео — курсор с ним
-    var tr = nul.transform;
     function vec(prop, a, pad) {  // у 2D-слоя Position, Anchor и Scale — из трёх чисел: третье как есть (pad) или 0
         var v = prop.value;
         for (var i = a.length; i < v.length; i++) a.push(pad ? v[i] : 0);
         return a;
     }
-    tr.anchorPoint.setValue(vec(tr.anchorPoint, [0, 0], true));
 
     function ease(prop, speed) {  // скорость по всем измерениям значения (у Position — одна, по пути)
         var n = prop.isSpatial || !(prop.value instanceof Array) ? 1 : prop.value.length, a = [];
@@ -267,20 +267,27 @@ try {
             }
         }
     }
-    if (D.pos.length) keys(tr.position, D.pos, function (k) { return [k[1], k[2]]; });
-    keys(tr.rotation, D.rot, function (k) { return k[1]; });
-    keys(tr.scale, D.scl, function (k) { return [k[1], k[1]]; });
-
-    for (var i = 0; i < D.sprites.length; i++) {  // по слою на тип курсора, видим только свой — Opacity с удержанием
-        var s = D.sprites[i], L = comp.layers.add(imp(s.png));
-        L.name = "Cursor " + s.type;
+    // по слою на вид курсора, видим только свой — Opacity с удержанием. Ключи движения — прямо на картинке самого
+    // частого вида (первая); остальные привязаны к ней: hotspot в hotspot, правите её — они повторяют
+    var main = null, m = D.sprites[0];
+    for (var i = 0; i < D.sprites.length; i++) {
+        var s = D.sprites[i], L = comp.layers.add(imp(s.png)), lt = L.transform;
         L.startTime = t0;
         L.outPoint = t0 + dur;
-        L.parent = nul;
-        var lt = L.transform;
+        L.parent = main || video;  // координаты — в пикселях видео: двигаете или масштабируете видео — курсор с ним
         lt.anchorPoint.setValue(vec(lt.anchorPoint, [s.hx, s.hy], true));
-        lt.position.setValue(vec(lt.position, [0, 0], true));
-        lt.scale.setValue(vec(lt.scale, [s.scale, s.scale], true));
+        if (!main) {
+            main = L;
+            L.name = "Smooth Cursor";
+            if (D.pos.length) keys(lt.position, D.pos, function (k) { return [k[1], k[2]]; });
+            keys(lt.rotation, D.rot, function (k) { return k[1]; });
+            keys(lt.scale, D.scl, function (k) { return [k[1], k[1]]; });
+        } else {
+            L.name = "Cursor " + s.type;
+            lt.position.setValue(vec(lt.position, [m.hx, m.hy], true));
+            lt.scale.setValue(vec(lt.scale, [100 * s.scale / m.scale, 100 * s.scale / m.scale], true));
+            lt.rotation.setValue(0);
+        }
         L.motionBlur = D.blur;
         var op = lt.opacity, ts = [], vs = [];
         for (var j = 0; j < s.opacity.length; j++) { ts.push(t0 + s.opacity[j][0] / D.fps); vs.push(s.opacity[j][1]); }

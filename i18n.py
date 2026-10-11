@@ -240,10 +240,10 @@ EN.update({
         "The recording and the cursor go as separate layers into\nthe composition open in After Effects — on top\nof "
         "what is already there, at the current time.",
     "…ваши слои": "…your layers",
-    "Курсор — на null-слое с ключами на остановках, кликах и поворотах пути: их удобно править.\nОткройте нужную "
+    "Курсор — картинка с ключами прямо на ней: на остановках, кликах и поворотах пути, их удобно править.\nОткройте нужную "
     "композицию в AE и нажмите «Импортировать».\nНет открытой композиции — создадим новую по размеру и fps записи."
     "\nРазмытие в движении — средствами AE: включим его у слоёв курсора, затвор как в программе\nподскажем в журнале.":
-        "The cursor sits on a null layer with keys at stops, clicks and turns of the path — easy to edit.\nOpen the "
+        "The cursor is a picture with keys right on it, at stops, clicks and turns of the path — easy to edit.\nOpen the "
         "composition you need in AE and press “Import”.\nNo composition open — we create one with the recording's "
         "size and fps.\nMotion blur is done by AE: we turn it on for the cursor layers, and the log shows\nthe "
         "shutter that matches the app.",
