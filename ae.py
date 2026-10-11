@@ -211,6 +211,8 @@ def export(video, log_path, cfg):
     data = {"name": f"Smooth Cursor — {video.stem}", "video": str(src), "w": info["w"], "h": info["h"], "fps": fps,
             "same": same, "baked": baked, "frames": info["frames"], "sprites": sprites, "box": box,
             "show": hold_keys(vis), "kind": changes(kind), "blur": rc["motion_blur"],
+            "has": t("У этой записи в композиции курсор уже есть. Чтобы заменить, удалите слой «Smooth Cursor» "
+                     "и нажмите ещё раз."),
             "angle": angle, "phase": phase, "pos": pos, "rot": rot, "scl": scale}
     jsx = out / "import.jsx"
     jsx.write_text(JSX.replace("/*DATA*/", json.dumps(data)), encoding="utf-8-sig")  # с BOM — так AE читает UTF-8
@@ -286,7 +288,10 @@ try {
         it.parentFolder = folder;
         return it;
     }
-    function source() {  // исходник записи — один на все её фрагменты
+    function source() {  // исходник записи — один на все её фрагменты; уже в проекте (прошлое нажатие) — тот же
+        for (var i = 1; !footage && i <= app.project.numItems; i++)
+            if (app.project.item(i) instanceof FootageItem && among(path(app.project.item(i)), [D.video]))
+                footage = app.project.item(i);
         return footage || (footage = imp(D.video));
     }
     function vec(prop, a, pad) {  // у 2D-слоя Position, Anchor и Scale — из трёх чисел: третье как есть (pad) или 0
@@ -390,8 +395,17 @@ try {
     // фрагменты этой записи, что уже в композиции (Dynamic Link из Premiere: Replace with After Effects Composition):
     // каждый становится двумя слоями — исходник (вместо готового со вшитым курсором) и курсор; обрезка, время,
     // скорость и положение — как были. Нет таких — запись целиком от текущего времени
+    function path(item) {
+        try { return item.file.fsName.toLowerCase(); } catch (e) { return ""; }
+    }
     function file(L) {
-        try { return L.source.file.fsName.toLowerCase(); } catch (e) { return ""; }
+        return path(L.source);
+    }
+    function hasCursor(video) {  // уже с курсором (нажали ещё раз) — второй не кладём
+        for (var i = 1; i <= comp.numLayers; i++)
+            if (comp.layer(i).name == "Smooth Cursor" && comp.layer(i).parent && comp.layer(i).parent.index == video.index)
+                return true;
+        return false;
     }
     function among(f, list) {
         for (var i = 0; i < list.length; i++) if (f && f == list[i].toLowerCase()) return true;
@@ -404,10 +418,14 @@ try {
         v.startTime = fresh ? 0 : comp.time;
         videos.push(v);
     }
+    var done = 0;
     for (i = 0; i < videos.length; i++) {
+        if (hasCursor(videos[i])) continue;
         if (among(file(videos[i]), D.baked)) videos[i].replaceSource(source(), false);
         addCursor(videos[i]);
+        done++;
     }
+    if (!done) alert(D.has);
     if (fresh) comp.parentFolder = folder;
     if (D.blur) comp.motionBlur = true;  // переключатель «Enable Motion Blur» у композиции
 } catch (e) {
