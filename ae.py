@@ -183,7 +183,9 @@ def export(video, log_path, cfg):
     scale = [(n, round(v * f, 4), round(a * f, 4), round(b * f, 4))
              for n, v, a, b in value_keys(100 * (1 - (1 - rc["click_scale"]) * track["press"]), fps, TOL_PCT, kinks)]
     angle, phase = blur_settings(rc, fps)
+    baked = [str(video.with_name(video.stem + e)) for e in ("_smooth.mp4", "_smooth_debug.mp4")]
     data = {"name": f"Smooth Cursor — {video.stem}", "video": str(src), "w": info["w"], "h": info["h"], "fps": fps,
+            "same": [str(video), str(src), *baked], "baked": baked,
             "frames": info["frames"], "sprites": sprites, "blur": rc["motion_blur"],
             "angle": angle, "phase": phase, "pos": pos, "rot": rot, "scl": scale}
     jsx = out / "import.jsx"
@@ -222,7 +224,7 @@ try {
         it.parentFolder = folder;
         return it;
     }
-    var footage = imp(D.video), dur = D.frames / D.fps;
+    var dur = D.frames / D.fps;
     if (fresh) {  // нет открытой композиции — новая по записи, размытие как в программе
         comp = app.project.items.addComp(D.name, D.w, D.h, 1, dur, D.fps);
         comp.parentFolder = folder;
@@ -230,9 +232,23 @@ try {
         comp.shutterPhase = D.phase;
         comp.openInViewer();
     }
-    var t0 = fresh ? 0 : comp.time;
-    var video = comp.layers.add(footage);
-    video.startTime = t0;
+    // эта запись уже в композиции (Dynamic Link из Premiere: Replace with After Effects Composition) — курсор к ней:
+    // готовое видео со вшитым курсором подменяем исходником, а время, обрезку и положение слоя не трогаем
+    function file(L) {
+        try { return L.source.file.fsName.toLowerCase(); } catch (e) { return ""; }
+    }
+    function among(f, list) {
+        for (var i = 0; i < list.length; i++) if (f && f == list[i].toLowerCase()) return true;
+        return false;
+    }
+    var video = null;
+    for (var i = 1; !fresh && !video && i <= comp.numLayers; i++) if (among(file(comp.layer(i)), D.same)) video = comp.layer(i);
+    if (video && among(file(video), D.baked)) video.replaceSource(imp(D.video), false);
+    if (!video) {
+        video = comp.layers.add(imp(D.video));
+        video.startTime = fresh ? 0 : comp.time;
+    }
+    var t0 = video.startTime;  // кадр 0 записи — в этот момент композиции
     function vec(prop, a, pad) {  // у 2D-слоя Position, Anchor и Scale — из трёх чисел: третье как есть (pad) или 0
         var v = prop.value;
         for (var i = a.length; i < v.length; i++) a.push(pad ? v[i] : 0);
@@ -272,8 +288,10 @@ try {
     var main = null, m = D.sprites[0];
     for (var i = 0; i < D.sprites.length; i++) {
         var s = D.sprites[i], L = comp.layers.add(imp(s.png)), lt = L.transform;
-        L.startTime = t0;
-        L.outPoint = t0 + dur;
+        L.startTime = video.inPoint;  // курсор — там же, где видео (обрезанное в Premiere — тоже)
+        L.inPoint = video.inPoint;
+        L.outPoint = video.outPoint;
+        L.moveBefore(video);
         L.parent = main || video;  // координаты — в пикселях видео: двигаете или масштабируете видео — курсор с ним
         lt.anchorPoint.setValue(vec(lt.anchorPoint, [s.hx, s.hy], true));
         if (!main) {
