@@ -20,7 +20,8 @@ def run(cmd):
 run([sys.executable, "make_icon.py"])
 ico, png = ROOT / "assets" / "icon.ico", ROOT / "assets" / "icon.png"
 run(PYI + ["--windowed", "--name", "Smooth Cursor", "--icon", str(ico), "--distpath", str(B / "dist"),
-           "--add-data", f"{ROOT / 'fonts'};fonts", "--add-data", f"{ROOT / 'assets'};assets", str(ROOT / "app.pyw")])
+           "--add-data", f"{ROOT / 'fonts'};fonts", "--add-data", f"{ROOT / 'assets'};assets",
+           "--add-data", f"{ROOT / 'premiere'};premiere", str(ROOT / "app.pyw")])
 
 app_dir = B / "dist" / "Smooth Cursor"
 payload = B / "payload.zip"

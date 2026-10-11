@@ -85,8 +85,9 @@ def smooth_tilt(deg, fps):
     return np.convolve(deg, k / k.sum())[h:h + len(deg)]
 
 
-def frame_tilt(v, ok, level, fps, right_deg, left_deg):
-    """Наклон по кадрам, в шагах TILT_STEP_DEG: tilt_angle по скорости v (там, где не ok, — 0), сглаженный по времени.
+def frame_tilt(v, ok, level, fps, right_deg, left_deg, step=TILT_STEP_DEG):
+    """Наклон по кадрам, в шагах step (None — в градусах, без округления): tilt_angle по скорости v (там, где не ok,
+    — 0), сглаженный по времени.
     На кадрах анимации клика (level > 0) — 0: у клика свой поворот, а пары «шаг клика × шаг наклона» дали бы сотни
     спрайтов. Рендер знает будущее, поэтому наклон плавно сходит на нет к клику и возвращается после него
     (за TILT_RAMP_MS, по smoothstep) — без рывка даже при клике на полном ходу."""
@@ -96,7 +97,7 @@ def frame_tilt(v, ok, level, fps, right_deg, left_deg):
     after = np.minimum.accumulate(np.where(click, n, 2 * len(n))[::-1])[::-1] - n  # и до следующего
     u = np.clip(np.minimum(before, after) * 1000 / fps / TILT_RAMP_MS, 0, 1)
     deg = smooth_tilt(np.where(ok, tilt_angle(v, right_deg, left_deg), 0.0), fps) * u * u * (3 - 2 * u)
-    return np.round(deg / TILT_STEP_DEG).astype(int)
+    return np.round(deg / step).astype(int) if step else deg
 
 
 def ghost_tilt(k):
@@ -429,6 +430,46 @@ def export_csv(path, track, w, h, fps, types):
                          types[track["type"][n]], round(x / w, 6), round(1 - y / h, 6)])
 
 
+def sync_offset(cfg, fps):
+    """Сдвиг курсора относительно картинки, мс: по fps видео ({fps: мс, default: мс}) или одно число."""
+    offset = cfg["sync"]["offset_ms"]
+    return offset.get(round(fps), offset.get("default", 0)) if isinstance(offset, dict) else offset
+
+
+def cursor_track(lg, info, cfg, ghost_ms=()):
+    """Курсор по кадрам видео: позиции в пикселях видео (vx, vy), видимость, сила анимации клика press 0..1 и её шаг
+    level, наклон в движении tilt_deg (°) и tilt (шаги TILT_STEP_DEG). Возвращает (track, to_video — дисплей → видео,
+    кроп источника в пикселях дисплея, размер курсора на видео в px)."""
+    rc, disp, fps = cfg["render"], lg["display"], info["fps"]
+    # Где дисплей на холсте OBS (снято с трансформации источника при записи); у старых логов — на весь кадр
+    mp = disp.get("map") or {"m": [info["w"] / disp["width"], 0, 0, 0, info["h"] / disp["height"], 0],
+                             "canvas": [info["w"], info["h"]], "crop": [0, 0, disp["width"], disp["height"]]}
+    a, b, c, d, e, f = mp["m"]
+    kx, ky = info["w"] / mp["canvas"][0], info["h"] / mp["canvas"][1]  # холст → видео (масштаб вывода OBS)
+
+    def to_video(x, y):
+        return kx * (a * x + b * y + c), ky * (d * x + e * y + f)
+
+    track = smoothing.frame_track(lg, fps, info["frames"], cfg["smoothing"], sync_offset(cfg, fps), ghost_ms)
+    press = click_curve(track["click_age"], rc["click_ms"], track["press_len"]) if rc["click_animation"] else np.zeros(len(track["x"]))
+    track["press"], track["level"] = press, np.round(press * (CLICK_STEPS - 1)).astype(int)
+    cl, ct, cr, cb = mp["crop"]  # за кропом источника курсора на видео нет
+    track["visible"] &= (track["x"] >= cl) & (track["x"] < cr) & (track["y"] >= ct) & (track["y"] < cb)
+    track["vx"], track["vy"] = to_video(track["x"], track["y"])
+    track["raw_vx"], track["raw_vy"] = to_video(track["raw_x"], track["raw_y"])
+    track["vghosts"] = [to_video(gx, gy) for gx, gy in track["ghosts"]]
+    vis = track["visible"]
+    v = np.gradient(track["vx"]) * fps / info["w"] if len(vis) > 1 else np.zeros(len(vis))
+    # там, где курсор появляется или пропадает, разница позиций — скачок, а не скорость
+    ok = vis & np.r_[vis[1:], True] & np.r_[True, vis[:-1]]
+    track["tilt_deg"] = np.where(vis, frame_tilt(v, ok, track["level"], fps, rc["motion_tilt_right_deg"],
+                                                 rc["motion_tilt_left_deg"], step=None), 0.0)
+    track["tilt"] = np.round(track["tilt_deg"] / TILT_STEP_DEG).astype(int)
+    zoom = abs(kx * ky * (a * e - b * d)) ** 0.5  # во сколько раз захват увеличен на видео
+    size = max(4, round(wc.cursor_base_size() * disp["dpi"] / 96 * rc["cursor_scale"] * zoom))
+    return track, to_video, (cl, ct, cr, cb), size
+
+
 def render(video, log_path, cfg, progress=None, clip=None):
     """Рендер видео с плавным курсором. progress(pct) → True отменяет рендер (по умолчанию — лог каждые 10%).
     clip = (начало_с, длина_с) — короткое превью во временный файл."""
@@ -440,26 +481,14 @@ def render(video, log_path, cfg, progress=None, clip=None):
                 log.info(t("Рендер %d%%"), min(pct, 100))
                 nxt[0] = pct // 10 * 10 + 10
 
-    rc, sm = cfg["render"], cfg["smoothing"]
+    rc = cfg["render"]
     ffmpeg, ffprobe = tool(rc["ffmpeg"], "ffmpeg"), tool(rc["ffmpeg"], "ffprobe")
     codec = pick_encoder(ffmpeg, rc["codec"])
     info = probe(ffprobe, video)
     lg = json.loads(Path(log_path).read_text(encoding="utf-8"))
-    disp = lg["display"]
-    info["dw"], info["dh"] = disp["width"], disp["height"]
-    # Где дисплей на холсте OBS (снято с трансформации источника при записи); у старых логов — на весь кадр
-    mp = disp.get("map") or {"m": [info["w"] / disp["width"], 0, 0, 0, info["h"] / disp["height"], 0],
-                             "canvas": [info["w"], info["h"]], "crop": [0, 0, disp["width"], disp["height"]]}
-    a, b, c, d, e, f = mp["m"]
-    kx, ky = info["w"] / mp["canvas"][0], info["h"] / mp["canvas"][1]  # холст → видео (масштаб вывода OBS)
-
-    def to_video(x, y):
-        return kx * (a * x + b * y + c), ky * (d * x + e * y + f)
-
+    info["dw"], info["dh"] = lg["display"]["width"], lg["display"]["height"]
     fps = info["fps"]
-    offset = cfg["sync"]["offset_ms"]
-    if isinstance(offset, dict):  # {fps: мс, default: мс}
-        offset = offset.get(round(fps), offset.get("default", 0))
+    offset = sync_offset(cfg, fps)
     if clip:
         start = min(max(0.0, clip[0]), max(0.0, info["duration"] - 0.5))
         clip = (start, min(clip[1], info["duration"] - start))
@@ -472,25 +501,10 @@ def render(video, log_path, cfg, progress=None, clip=None):
     accurate = rc["motion_blur"] and rc["blur_accurate"]  # точный motion blur вместо шлейфа из копий
     ghost_ms = [1000 / fps * rc["blur_length"] * (i + 1) / len(ghost_alphas(rc))
                 for i in range(len(ghost_alphas(rc)))] if rc["motion_blur"] and not accurate else []
-    track = smoothing.frame_track(lg, fps, info["frames"], sm, offset, ghost_ms)
-    press = click_curve(track["click_age"], rc["click_ms"], track["press_len"]) if rc["click_animation"] else np.zeros(len(track["x"]))
-    track["level"] = np.round(press * (CLICK_STEPS - 1)).astype(int)
-    cl, ct, cr, cb = mp["crop"]  # за кропом источника курсора на видео нет
-    track["visible"] &= (track["x"] >= cl) & (track["x"] < cr) & (track["y"] >= ct) & (track["y"] < cb)
-    track["vx"], track["vy"] = to_video(track["x"], track["y"])
-    track["raw_vx"], track["raw_vy"] = to_video(track["raw_x"], track["raw_y"])
-    track["vghosts"] = [to_video(gx, gy) for gx, gy in track["ghosts"]]
-    vis = track["visible"]
-    v = np.gradient(track["vx"]) * fps / info["w"] if len(vis) > 1 else np.zeros(len(vis))
-    # там, где курсор появляется или пропадает, разница позиций — скачок, а не скорость
-    ok = vis & np.r_[vis[1:], True] & np.r_[True, vis[:-1]]
-    types = lg["types"]
-    track["tilt"] = np.where(vis, frame_tilt(v, ok, track["level"], fps, rc["motion_tilt_right_deg"],
-                                             rc["motion_tilt_left_deg"]), 0)
+    track, to_video, (cl, ct, cr, cb), size = cursor_track(lg, info, cfg, ghost_ms)
+    vis, types = track["visible"], lg["types"]
     used = sorted({types[k] for k in np.unique(track["type"][vis])} | {"arrow"}, key=types.index)
     poses = {(types[k], lvl, tl) for k, lvl, tl in zip(*(track[c][vis].tolist() for c in ("type", "level", "tilt")))}
-    zoom = abs(kx * ky * (a * e - b * d)) ** 0.5  # во сколько раз захват увеличен на видео
-    size = max(4, round(wc.cursor_base_size() * disp["dpi"] / 96 * rc["cursor_scale"] * zoom))
     if clip:
         out = Path(tempfile.gettempdir()) / f"{video.stem}_preview.mp4"
         try:

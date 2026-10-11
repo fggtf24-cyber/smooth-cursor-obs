@@ -233,4 +233,47 @@ EN.update({
     "Идёт запись — сначала остановите её.": "Recording in progress — stop it first.",
     "Идёт запись. Остановить её и выйти?": "Recording in progress. Stop it and quit?",
     "Идёт рендер. Прервать и выйти?": "Rendering in progress. Cancel and quit?", "Ошибка: %s": "Error: %s",
+    # --- After Effects ---
+    "Импорт в открытую композицию": "Import into the open composition",
+    "Запись и курсор лягут отдельными слоями в композицию,\nкоторая сейчас открыта в After Effects — поверх\nтого, "
+    "что в ней уже есть, от текущего времени.":
+        "The recording and the cursor go as separate layers into\nthe composition open in After Effects — on top\nof "
+        "what is already there, at the current time.",
+    "…ваши слои": "…your layers",
+    "Курсор — на null-слое с ключами на остановках, кликах и поворотах пути: их удобно править.\nОткройте нужную "
+    "композицию в AE и нажмите «Импортировать».\nНет открытой композиции — создадим новую по размеру и fps записи."
+    "\nРазмытие в движении — средствами AE: включим его у слоёв курсора, затвор как в программе\nподскажем в журнале.":
+        "The cursor sits on a null layer with keys at stops, clicks and turns of the path — easy to edit.\nOpen the "
+        "composition you need in AE and press “Import”.\nNo composition open — we create one with the recording's "
+        "size and fps.\nMotion blur is done by AE: we turn it on for the cursor layers, and the log shows\nthe "
+        "shutter that matches the app.",
+    "Это окно показывается один раз.": "This window shows only once.", "Импортировать": "Import", "Отмена": "Cancel",
+    "After Effects: размытие включено у слоёв курсора и композиции. Как в программе — Composition Settings → "
+    "Advanced: Shutter Angle %d°, Shutter Phase %d°":
+        "After Effects: motion blur is on for the cursor layers and the composition. To match the app — "
+        "Composition Settings → Advanced: Shutter Angle %d°, Shutter Phase %d°",
+    "After Effects: %s": "After Effects: %s",
+    "Перепаковываю %s в mp4 для After Effects…": "Remuxing %s to mp4 for After Effects…",
+    "ffmpeg не смог перепаковать {}: {}": "ffmpeg could not remux {}: {}",
+    "After Effects: %d ключей позиции на %d кадров, слои в %s": "After Effects: %d position keys for %d frames, "
+                                                                "layers in %s",
+    "After Effects не найден — установлен ли он?": "After Effects not found — is it installed?",
+    # --- Premiere ---
+    "Premiere: видео в секвенции «%s» с %s (V1)": "Premiere: video placed in sequence “%s” at %s (V1)",
+    "Premiere не вставил видео: %s": "Premiere did not place the video: %s",
+    "Premiere: жду, когда заберёт %s…": "Premiere: waiting for it to take %s…",
+    "Premiere пока не забрал видео: он открыт, в нём открыта секвенция? Не помогает — перезапустите Premiere, "
+    "видео дождётся.": "Premiere has not taken the video yet: is it open, with a sequence open? If that doesn't "
+                       "help, restart Premiere — the video will wait.",
+    "Нет установщика плагинов Adobe — установлен ли Creative Cloud?":
+        "Adobe's plugin installer is missing — is Creative Cloud installed?",
+    "установщик Adobe: {}": "Adobe installer: {}",
+    "Плагин Smooth Cursor для Premiere установлен": "Smooth Cursor plugin for Premiere installed",
+    "Чтобы класть видео в секвенцию, в Premiere нужен плагин Smooth Cursor — он ставится один раз установщиком "
+    "Adobe.\n\nПоставить? Видео ляжет в открытую секвенцию на плейхед, а если там занято — сразу после, где хватит "
+    "места (V1 и A1).":
+        "To place videos into a sequence, Premiere needs the Smooth Cursor plugin — Adobe's installer adds it once."
+        "\n\nInstall it? The video goes into the open sequence at the playhead, or right after it where there is "
+        "room if that spot is taken (V1 and A1).",
+    "Плагин для Premiere не поставился: %s": "Premiere plugin was not installed: %s",
 })

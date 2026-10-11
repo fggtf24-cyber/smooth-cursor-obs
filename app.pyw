@@ -25,7 +25,9 @@ try:
     from PIL import Image, ImageDraw, ImageFont, ImageTk
 
     import win32cursor as wc  # первым из своих: включает DPI awareness
+    import ae
     import i18n
+    import premiere
     import render
     import settings
     import updater
@@ -295,6 +297,7 @@ class LivePreview(tk.Canvas):
         self.mon, self.last_t, self.press_t, self.release_t, self.was_down = None, time.perf_counter(), -1e9, -1e9, False
         self.click_anim_t = -1e9  # когда последний раз играла анимация клика: после неё наклон возвращается плавно
         self.tilt_deg = 0.0  # сглаженный угол наклона в движении
+        self.drawn = None  # что нарисовано в прошлом кадре — то же самое не перерисовываем
         self.handles = {wc.user32.LoadCursorW(None, cid): n for n, (cid, _) in wc.CURSORS.items()}
         self.sets, self.sig, self.sig_seen, self.sig_t = {}, None, None, 0
         self.pt, self.ci = W.POINT(), wc.CURSORINFO(cbSize=C.sizeof(wc.CURSORINFO))
@@ -400,21 +403,35 @@ class LivePreview(tk.Canvas):
         qx, qy = to(*self.p)
         self.trail.append((now, qx, qy))
 
-        self.delete("dyn")
+        # кадр сначала собираем списком: перерисовка холста в Tk стоит ~0,5 мс на элемент, поэтому если ничего не
+        # изменилось (курсор стоит, след погас) — холст не трогаем, и в покое главный поток свободен
+        ops = []
         for (i, j), born in list(self.pix.items()):  # пиксельный след руки, затухает за секунду
             age = now - born
             if age > 1.0:
                 del self.pix[(i, j)]
                 continue
             px, py = x0 + i * self.FINE, y0 + j * self.FINE
-            col = self.SHADES[min(len(self.SHADES) - 1, int(age * len(self.SHADES)))]
-            self.create_rectangle(px, py, px + self.FINE - 1, py + self.FINE - 1, fill=col, outline=col, tags="dyn")
+            ops.append((px, py, px + self.FINE - 1, py + self.FINE - 1,
+                        self.SHADES[min(len(self.SHADES) - 1, int(age * len(self.SHADES)))]))
         for i, (_, tx, ty) in enumerate(self.trail):
             if i % 3 == 0:
-                self.create_rectangle(tx - 1, ty - 1, tx + 1, ty + 1, fill=MUTE, outline=MUTE, tags="dyn")
-        if not self.ci.flags & 1:
-            return
-        self.create_image(qx + 8 - 36, qy + 10 - 36, anchor="nw", image=self.glow, tags="dyn")
+                tx, ty = round(tx, 1), round(ty, 1)  # пружина подходит к цели бесконечно: без округления кадр «новый»
+                ops.append((tx - 1, ty - 1, tx + 1, ty + 1, MUTE))
+        if self.ci.flags & 1:
+            self.cursor_ops(ops, now, mon, s, steps, down, qx, qy, rc)
+        if ops != self.drawn:
+            self.drawn = ops
+            self.delete("dyn")
+            for op in ops:
+                if len(op) == 5:
+                    self.create_rectangle(*op[:4], fill=op[4], outline=op[4], tags="dyn")
+                else:
+                    self.create_image(op[0], op[1], anchor="nw", image=op[2], tags="dyn")
+
+    def cursor_ops(self, ops, now, mon, s, steps, down, qx, qy, rc):
+        """Свечение, «призраки» шлейфа и сам курсор — в список кадра: (x, y, картинка)."""
+        ops.append((round(qx + 8 - 36, 1), round(qy + 10 - 36, 1), self.glow))
         name = self.handles.get(self.ci.hCursor, "arrow")
         level = 0
         if rc["click_animation"]:
@@ -442,9 +459,9 @@ class LivePreview(tk.Canvas):
                 gx, gy = float(np.interp(tg, tts, txs)), float(np.interp(tg, tts, tys))
                 if abs(gx - qx) + abs(gy - qy) > 0.5:
                     im, (hx, hy), _ = self.cursor(name, 0, render.ghost_tilt(tilt), ghost=len(alphas) - 1 - gi)
-                    self.create_image(gx - hx, gy - hy, anchor="nw", image=im, tags="dyn")
+                    ops.append((round(gx - hx, 1), round(gy - hy, 1), im))
         im, (hx, hy), _ = self.cursor(name, level, tilt)
-        self.create_image(qx - hx, qy - hy, anchor="nw", image=im, tags="dyn")
+        ops.append((round(qx - hx, 1), round(qy - hy, 1), im))
 
 
 class ClickStrip(tk.Canvas):
@@ -1176,6 +1193,9 @@ class App:
     def rebuild(self):
         """Пересобрать окно целиком (язык, пресет) — с тем же журналом, кодировщиком и шагом онбординга."""
         step =self.onboarding.step if self.onboarding and self.onboarding.winfo_exists() else None
+        focused = self.root.focus_get()
+        if isinstance(focused, tk.Entry):  # вписанное, но ещё не применённое значение — применить до пересборки
+            focused.event_generate("<FocusOut>")
         for w in self.root.winfo_children():
             w.destroy()
         self.log_win = None
@@ -1443,6 +1463,8 @@ class App:
         b = tk.Frame(p, bg=BG)
         b.pack(side="bottom", fill="x", pady=(10, 0))
         Btn(b, t("Рендер"), self.render_selected, kind="primary").pack(side="left")
+        Btn(b, "→  After Effects", self.ae_selected).pack(side="left", padx=(8, 0))
+        Btn(b, "→  Premiere", self.premiere_selected).pack(side="left", padx=(8, 0))
         Btn(b, "▶  " + t("Превью"), self.preview_selected).pack(side="left", padx=(8, 12))
         self.lbl(b, t("с")).pack(side="left")
         self.entry(b, "ui.preview_start", width=4, conv=float)[0].pack(side="left", padx=5, ipady=3)
@@ -1978,18 +2000,118 @@ class App:
             out = video.with_name(video.stem + "_smooth.mp4")
             subprocess.Popen(["explorer", "/select,", str(out if out.exists() else video)])
 
-    def enqueue(self, video, log_path, clip=None):
+    def ae_selected(self):
+        """Выбранная запись — в After Effects. В первый раз — окно о том, куда лягут слои."""
+        sel = self.selected()[:1]
+        if sel and self.cfg["ui"]["ae_intro"]:
+            threading.Thread(target=self._ae, args=sel[0], daemon=True).start()
+        elif sel:
+            self.ae_intro(sel[0])
+
+    def _ae(self, video, log_path):
+        try:
+            jsx, (angle, phase), _ = ae.export(video, log_path, self.cfg)
+            ae.send(jsx)
+            if self.cfg["render"]["motion_blur"]:
+                log.info(t("After Effects: размытие включено у слоёв курсора и композиции. Как в программе — "
+                           "Composition Settings → Advanced: Shutter Angle %d°, Shutter Phase %d°"), angle, phase)
+        except Exception as e:
+            log.error(t("After Effects: %s"), e)
+
+    def ae_intro(self, sel):
+        w = tk.Toplevel(self.root, bg=BG)
+        w.title("After Effects")
+        w.resizable(False, False)
+        w.transient(self.root)
+        pad = tk.Frame(w, bg=BG)
+        pad.pack(padx=34, pady=(26, 26))
+        self.lbl(pad, "AFTER EFFECTS", "caps", MUTE).pack(anchor="w")
+        tk.Label(pad, text=t("Импорт в открытую композицию"), font=(F["head"][0], 20), fg=INK, bg=BG).pack(
+            anchor="w", pady=(6, 14))
+        self.lbl(pad, t("Запись и курсор лягут отдельными слоями в композицию,\nкоторая сейчас открыта в After "
+                        "Effects — поверх\nтого, что в ней уже есть, от текущего времени."), "para", INK2,
+                 justify="left").pack(anchor="w")
+        c = tk.Canvas(pad, width=440, height=96, bg=FIELD, highlightthickness=1, highlightbackground=LINE)
+        c.pack(anchor="w", pady=(18, 18))
+        for i, (name, color, x1) in enumerate((("Smooth Cursor", "#2632E8", 430), (sel[0].name, "#7A7A7A", 430),
+                                               (t("…ваши слои"), LINE, 300))):  # слои как в таймлайне AE
+            y = 14 + i * 26
+            c.create_text(12, y + 8, anchor="w", text=str(i + 1), font=F["mono_s"], fill=MUTE)
+            c.create_rectangle(28, y + 3, 38, y + 13, fill=color, outline="")
+            c.create_text(46, y + 8, anchor="w", text=name[:34], font=F["small"], fill=INK if i < 2 else MUTE)
+            c.create_rectangle(270, y + 2, x1, y + 14, fill=color, outline="")
+        c.create_line(270, 6, 270, 90, fill=RED)
+        self.lbl(pad, t("Курсор — на null-слое с ключами на остановках, кликах и поворотах пути: их удобно "
+                        "править.\nОткройте нужную композицию в AE и нажмите «Импортировать».\nНет открытой "
+                        "композиции — создадим новую по размеру и fps записи.\nРазмытие в движении — средствами AE: "
+                        "включим его у слоёв курсора, затвор как в программе\nподскажем в журнале."), "small", INK2,
+                 justify="left").pack(anchor="w")
+        self.lbl(pad, t("Это окно показывается один раз."), "small", MUTE).pack(anchor="w", pady=(10, 0))
+        row = tk.Frame(pad, bg=BG)
+        row.pack(anchor="w", pady=(20, 0))
+
+        def go():
+            w.destroy()
+            self.cfg["ui"]["ae_intro"] = True
+            settings.save(self.cfg)
+            self.ae_selected()
+
+        Btn(row, t("Импортировать"), go, kind="primary").pack(side="left")
+        Btn(row, t("Отмена"), w.destroy).pack(side="left", padx=(8, 0))
+        w.bind("<Escape>", lambda e: w.destroy())
+        w.update_idletasks()
+        r = self.root
+        w.geometry(f"+{r.winfo_rootx() + (r.winfo_width() - w.winfo_reqwidth()) // 2}"
+                   f"+{r.winfo_rooty() + (r.winfo_height() - w.winfo_reqheight()) // 2}")
+        w.grab_set()
+        w.focus_force()
+
+    def premiere_selected(self):
+        """Отрендерить выбранные и положить в открытую секвенцию Premiere. В первый раз — поставить плагин."""
+        sel = self.selected()
+        if not sel:
+            return
+        if self.cfg["ui"]["premiere_plugin"] == premiere.PLUGIN_VERSION:
+            for video, lp in sel:
+                self.enqueue(video, lp, then=self._to_premiere)
+            return
+        # новая версия плагина с обновлением программы — ставим без вопроса: согласие уже было
+        if not self.cfg["ui"]["premiere_plugin"] and not messagebox.askyesno(APP, t(
+                "Чтобы класть видео в секвенцию, в Premiere нужен плагин Smooth Cursor — "
+                "он ставится один раз установщиком Adobe.\n\nПоставить? Видео ляжет в "
+                "открытую секвенцию на плейхед, а если там занято — сразу после, где "
+                "хватит места (V1 и A1).")):
+            return
+
+        def work():
+            try:
+                premiere.install()
+            except Exception as e:
+                return log.error(t("Плагин для Premiere не поставился: %s"), e)
+            self.cfg["ui"]["premiere_plugin"] = premiere.PLUGIN_VERSION
+            self.post(settings.save, self.cfg)
+            self.post(self.premiere_selected)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _to_premiere(self, out):
+        premiere.send(out, render.probe(render.tool(self.cfg["render"]["ffmpeg"], "ffprobe"), out)["duration"])
+
+    def enqueue(self, video, log_path, clip=None, then=None):
+        """then(готовое видео) — после рендера, в потоке рендера."""
         self.pending += 1
         self.prog_text.config(text=t("в очереди: {}").format(self.pending), fg=INK2)
-        self.renderer.submit(self._render, video, log_path, copy.deepcopy(self.cfg), clip)
+        self.renderer.submit(self._render, video, log_path, copy.deepcopy(self.cfg), clip, then)
 
-    def _render(self, video, log_path, cfg, clip):
+    def _render(self, video, log_path, cfg, clip, then=None):
         self.cancel = False
         self.post(self.prog_text.config, {"text": f"{t('превью') if clip else t('рендер')} · {video.stem}", "fg": INK})
         try:
             out = render.render(video, log_path, cfg, progress=self._progress, clip=clip)
             if clip:
                 os.startfile(out)
+            elif then:
+                then(out)
         except Exception as e:
             log.error("%s: %s", t("Превью не удалось") if clip else t("Рендер не удался"), e)
         finally:

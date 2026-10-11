@@ -243,6 +243,31 @@ def check_accurate_blur():
     print("точный motion blur и наклон в движении: ок")
 
 
+def check_ae():
+    """Ключи для After Effects: их мало, и кривая AE по ним (Bezier, влияние 1/3) идёт по траектории в допуске."""
+    import ae
+    cfg = copy.deepcopy(settings.DEFAULTS)
+    rc, fps, n = cfg["render"], 60.0, 120
+    tr = render.cursor_track(synth_log(), {"w": 1920, "h": 1080, "fps": fps, "frames": n}, cfg)[0]
+    pos = ae.position_keys(tr["vx"], tr["vy"], tr["visible"], {48}, fps)
+    assert len(pos) < n / 4 and 48 in [k[0] for k in pos], ("ключи позиции", [k[0] for k in pos])
+    sp = np.hypot(np.gradient(tr["vx"]), np.gradient(tr["vy"]))
+    for (a, xa, ya, _, _, out), (b, xb, yb, _, inn, _) in zip(pos, pos[1:]):
+        T = (b - a) / fps  # скорости обратно из касательных — проверяем ровно то, что уйдёт в AE
+        c = ae.path_curve(np.array([xa, ya]), np.array([xb, yb]), np.array(out) * 3 / T, -np.array(inn) * 3 / T,
+                          np.arange(b - a + 1) / (b - a), T)
+        err = np.hypot(c[:, 0] - tr["vx"][a:b + 1], c[:, 1] - tr["vy"][a:b + 1])
+        assert (err <= ae.TOL_PX + ae.TOL_MOVE * sp[a:b + 1] + 1e-3).all(), ("позиция мимо", a, b, err.max())
+    scale = 100 * (1 - (1 - rc["click_scale"]) * tr["press"])
+    keys = ae.value_keys(scale, fps, ae.TOL_PCT, [47])
+    assert 3 <= len(keys) <= 10 and 47 in [k[0] for k in keys], ("ключи масштаба", [k[0] for k in keys])
+    for (a, va, _, out), (b, vb, inn, _) in zip(keys, keys[1:]):
+        c = ae.hermite(va, vb, out, inn, np.arange(b - a + 1) / (b - a), (b - a) / fps)
+        assert np.abs(c - scale[a:b + 1]).max() <= ae.TOL_PCT + 1e-3, ("масштаб мимо", a, b)
+    assert ae.value_keys(np.full(n, 100.0), fps, ae.TOL_PCT) == [(0, 100.0, 0.0, 0.0)], "без клика — один ключ"
+    print(f"after effects: ок, {len(pos)} ключей позиции и {len(keys)} масштаба на {n} кадров")
+
+
 def check_presets():
     import copy
     cfg = copy.deepcopy(settings.DEFAULTS)
@@ -279,6 +304,7 @@ if __name__ == "__main__":
     check_smoothing()
     check_click_animation()
     check_obs_transform()
+    check_ae()
     check_render()
     check_accurate_blur()
     print("selftest OK")

@@ -1,0 +1,16 @@
+{
+  "manifestVersion": 5,
+  "id": "com.smoothcursor.premiere",
+  "name": "Smooth Cursor",
+  "version": "1.0.1",
+  "main": "index.js",
+  "host": {
+    "app": "premierepro",
+    "minVersion": "25.6.0",
+    "data": {"apiVersion": 2, "loadEvent": "startup"}
+  },
+  "entrypoints": [],
+  "requiredPermissions": {
+    "network": {"domains": ["http://localhost:47913"]}
+  }
+}

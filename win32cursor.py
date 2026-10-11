@@ -238,14 +238,31 @@ def _draw(h, size, bg):
     return px
 
 
+def _cursor_file(reg):
+    """Файл курсора из схемы Windows; "" — схема без файла (встроенный курсор)."""
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Control Panel\Cursors") as k:
+            return os.path.expandvars(winreg.QueryValueEx(k, reg)[0])
+    except OSError:
+        return ""
+
+
+def cursor_file_max(name):
+    """Самая крупная картинка в файле курсора .cur, px: крупнее Windows только растягивает. 0 — не .cur."""
+    try:
+        with open(_cursor_file(CURSORS.get(name, CURSORS["arrow"])[1]), "rb") as f:
+            head = f.read(6 + 16 * 64)  # заголовок и каталог картинок: ширина — первый байт записи, 0 — это 256
+        if head[2:4] != b"\x02\x00":
+            return 0
+        return max((head[6 + 16 * i] or 256) for i in range(min(int.from_bytes(head[4:6], "little"), 64)))
+    except (OSError, ValueError):
+        return 0
+
+
 def cursor_sprite(name, size):
     """Текущий системный курсор как RGBA size×size и его hotspot (x, y)."""
     cid, reg = CURSORS.get(name, CURSORS["arrow"])
-    try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Control Panel\Cursors") as k:
-            path = os.path.expandvars(winreg.QueryValueEx(k, reg)[0])
-    except OSError:
-        path = ""
+    path = _cursor_file(reg)
     h = user32.LoadImageW(None, path, 2, size, size, 0x10) if path else None  # IMAGE_CURSOR, LR_LOADFROMFILE
     shared = not h
     if shared:  # схема без файла — встроенный курсор

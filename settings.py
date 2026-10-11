@@ -44,7 +44,9 @@ DEFAULTS = {
         "export_keyframes": False,
     },
     "ui": {"folder": "", "auto_render": True, "preview_start": 0.0, "preview_len": 5.0, "lang": "ru",
-           "onboarded": False, "skip_version": ""},  # folder — папка записей OBS; skip_version — «не сейчас»
+           "onboarded": False, "skip_version": "", "ae_intro": False, "premiere_plugin": ""},
+    # folder — папка записей OBS; skip_version — «не сейчас»; ae_intro — окно про After Effects уже показано;
+    # premiere_plugin — какая версия плагина для Premiere поставлена
     "my_presets": [],  # свои пресеты: [{"name": ..., значения PRESET_KEYS}], сохраняются из меню пресетов
 }
 
