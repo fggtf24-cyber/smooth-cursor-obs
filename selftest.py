@@ -108,6 +108,8 @@ def check_click_animation():
     for deg, scale in ((15, 0.82), (90, 1.0), (-40, 0.6)):
         im, (hx, hy) = render.press_sprite(Image.fromarray(a, "RGBA"), (10, 10), scale, deg)
         assert np.array(im)[round(hy), round(hx), 3] > 128, (deg, scale, "hotspot уехал")
+    # пустой (невидимый) курсор программы — прозрачная точка, а не падение
+    assert render.press_sprite(Image.new("RGBA", (40, 40)), (10, 10), 0.5, 0)[0].size == (1, 1), "пустой курсор"
     print("анимация клика: ок")
 
 

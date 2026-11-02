@@ -58,6 +58,8 @@ def press_sprite(img, hot, scale, deg):
     n = round(2 * r * scale)
     c = c.rotate(deg, Image.BICUBIC, center=(r, r)).resize((n, n), Image.LANCZOS).convert("RGBA")
     box = c.getbbox()
+    if box is None:  # пустой курсор программы или сжат до невидимости — прозрачная точка, как в morph_sprite
+        return Image.new("RGBA", (1, 1)), (0, 0)
     return c.crop(box), (n / 2 - box[0], n / 2 - box[1])
 
 
