@@ -211,6 +211,10 @@ class Obs:
         paused = sum((b or now) - a for a, b in self.pauses)
         return (now - self.t_started - paused) / 1e9, bool(self.pauses) and self.pauses[-1][1] is None
 
+    def pause_toggle(self):
+        """Пауза записи в OBS; уже на паузе — продолжить."""
+        (self.req.resume_record if self.elapsed()[1] else self.req.pause_record)()
+
     def stop(self):
         resp = self.req.stop_record()
         self.stopped.wait(60)  # STOPPED приходит, когда файл дописан

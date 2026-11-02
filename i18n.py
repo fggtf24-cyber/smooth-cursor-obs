@@ -27,6 +27,12 @@ EN = {
         "(Tools → WebSocket Server Settings)? Are the port and password right?",
     "● Запись идёт": "● Recording",
     "пауза": "paused",
+    "Не удалось поставить запись на паузу: %s": "Could not pause the recording: %s",
+    "Значок записи в углу экрана": "Recording badge in the screen corner", "Значок записи": "Recording badge",
+    "в углу экрана: идёт ли запись, пауза и стоп; перетаскивается мышью. На видео его нет.":
+        "in the screen corner: whether recording is on, pause and stop; drag it anywhere. It is not in the video.",
+    "Windows не умеет прятать значок записи от захвата экрана (нужна Windows 10 2004 или новее)":
+        "Windows can't hide the recording badge from screen capture (needs Windows 10 2004 or newer)",
     "OBS настроен: сцена «%s», %s %dx%d @ %d fps": "OBS is set up: scene “%s”, %s %dx%d @ %d fps",
     "Не удалось остановить запись в OBS: %s": "Could not stop the recording in OBS: %s",
     "■ Запись остановлена: %s": "■ Recording stopped: %s",
@@ -178,7 +184,9 @@ EN.update({
     "Наклон": "Tilt", "Градусы против часовой вокруг кончика стрелки; минус — по часовой.":
         "Degrees counter-clockwise around the arrow tip; negative is clockwise.",
     "Длительность": "Duration",
-    "Смена курсора": "Cursor change", "Кино + смена курсора": "Cinematic + cursor change",
+    "Смена курсора": "Cursor change", "Отскок": "Bounce",
+    "На сколько новый вид проскакивает крупнее, прежде чем встать на место. 0 — без отскока.":
+        "How much bigger the new cursor overshoots before it settles. 0 — no bounce.", "Кино + смена курсора": "Cinematic + cursor change",
     "мс: прежний вид сжимается в точку, новый вырастает из неё с отскоком — стрелка → рука, инструменты Premiere и "
     "DaVinci.":
         "ms: the old cursor shrinks to a point, the new one grows out of it with a bounce — arrow → hand, "

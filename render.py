@@ -4,6 +4,7 @@
 Неактивные спрятаны за кадром (x = HIDE), поэтому смена типа — это просто перенос двух overlay.
 """
 import csv
+import functools
 import json
 import logging
 import math
@@ -68,16 +69,33 @@ def pose_sprite(big, big_hot, rc, lvl, tilt):
                         rc["click_tilt_deg"] * p + tilt * TILT_STEP_DEG)
 
 
-def morph_sprite(old, old_hot, new, new_hot, p, k=0.25):
+@functools.lru_cache
+def _bump(amount):
+    """Сила горба отскока, при которой рост проскакивает ровно на amount (подбор делением пополам)."""
+    u = np.linspace(0, 1, 401)
+    base, bump = 1 - (1 - u) ** 3, np.sin(np.pi * u) ** 2 * u
+    lo, hi = 0.0, 5.0
+    for _ in range(40):
+        k = (lo + hi) / 2
+        lo, hi = (k, hi) if (base + k * bump).max() - 1 < amount else (lo, k)
+    return lo
+
+
+def bounce_curve(u, amount):
+    """Рост нового вида 0 → 1 за u 0..1: ease-out и горб отскока — проскакивает на amount (0.12 — на 12% крупнее)
+    и мягко возвращается; 0 — без отскока. В конце ровно 1 и без рывка."""
+    return 1 - (1 - u) ** 3 + _bump(round(float(amount), 3)) * math.sin(math.pi * u) ** 2 * u
+
+
+def morph_sprite(old, old_hot, new, new_hot, p, bounce=0.12, k=0.25):
     """Смена вида курсора, p 0..1: за первые MORPH_OUT прежний сжимается в точку (к своему центру, с ускорением),
-    затем новый плавно вырастает из точки с одним мягким отскоком — проскакивает на ~12% крупнее и возвращается
-    (затухающая пружина в полтора полупериода, ровно 1 в конце). old/new — спрайты в 1/k размера (по умолчанию 4×, как для анимации клика),
+    затем новый плавно вырастает из точки с одним мягким отскоком — проскакивает на bounce крупнее и возвращается. old/new — спрайты в 1/k размера (по умолчанию 4×, как для анимации клика),
     результат — в обычном. Точка клика (hotspot) нового — на месте. Возвращает (картинка, hotspot)."""
     if p < MORPH_OUT:
         img, hot, scale = old, old_hot, 1 - (p / MORPH_OUT) ** 2
     else:
         u = (p - MORPH_OUT) / (1 - MORPH_OUT)
-        img, hot, scale = new, new_hot, 1 - math.exp(-3.5 * u) * math.cos(1.5 * math.pi * u)
+        img, hot, scale = new, new_hot, bounce_curve(u, bounce)
     if scale < 0.08:  # момент между ними: курсор — точка
         return Image.new("RGBA", (1, 1)), (0, 0)
     x0, y0, x1, y1 = img.getbbox() or (0, 0, *img.size)
@@ -299,7 +317,8 @@ def make_sprites(work, types, poses, size, rc, custom=None, morphs=()):
                 g.putalpha(img.getchannel("A").point(lambda v: round(v * a)))
                 slots.append((f"g{gi}_{t}{tilt_tag(gk)}", g, hot))
     slots += [(f"{t}_{lvl}{tilt_tag(k)}", img, hot) for (t, lvl, k), (img, hot) in mains.items()]
-    slots += [(f"m{m}_{a}_{b}", *morph_sprite(*big_of(a), *big_of(b), m / MORPH_STEPS)) for a, b, m in sorted(morphs)]
+    slots += [(f"m{m}_{a}_{b}", *morph_sprite(*big_of(a), *big_of(b), m / MORPH_STEPS,
+                                                       rc["morph_bounce"])) for a, b, m in sorted(morphs)]
     if rc["debug_raw"]:
         img, hot = mains.get(("arrow", 0, 0)) or wc.cursor_sprite("arrow", size)
         a = np.array(img, float)

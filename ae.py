@@ -201,7 +201,8 @@ def export(video, log_path, cfg):
     for a, b, m in morphs:
         na, nb = (types[x] if x < len(types) else "arrow" for x in (a, b))
         img, (hx, hy) = render.morph_sprite(*wc.cursor_sprite(na, px, lg.get("custom")),
-                                            *wc.cursor_sprite(nb, px, lg.get("custom")), m / render.MORPH_STEPS, 1)
+                                            *wc.cursor_sprite(nb, px, lg.get("custom")), m / render.MORPH_STEPS,
+                                            rc["morph_bounce"], 1)
         png = out / f"cursor_m{m}_{na}_{nb}.png"
         img.save(png)
         sprites.append({"type": f"m{m}_{na}_{nb}", "png": str(png), "w": img.width, "h": img.height, "hx": hx, "hy": hy,

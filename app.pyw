@@ -250,6 +250,109 @@ def pixel_logo(parent):
     return c
 
 
+class RecOverlay(tk.Toplevel):
+    """Значок записи в углу записываемого экрана, как у Bandicam, с кнопками паузы и стопа. Его видите только вы:
+    Windows исключает окно из захвата экрана (WDA_EXCLUDEFROMCAPTURE, Windows 10 2004+), так что ни в OBS, ни на видео
+    его нет. Клик по нему не забирает фокус у программы, где вы работаете. Где Windows так не умеет — значка нет совсем
+    (иначе он попал бы в запись): OSError. Всё нарисовано фигурами на холсте постоянного размера: значки ровные, а
+    плашка не меняет ширину, когда REC сменяется на PAUSE. За левую часть плашку можно перетащить куда угодно (хоть на
+    другой монитор): pos — где она стояла (левый верх, настоящие пиксели экрана), on_moved(x, y) — куда поставили."""
+    BG, HOVER, FG, DIM = "#161616", "#2E2E2E", "#F2F2F2", "#5A1D1A"
+    H, BTN = 40, 32  # высота плашки и кнопки, px при 100%
+
+    def __init__(self, root, display, on_pause, on_stop, pos=None, on_moved=None, exclude=True):
+        super().__init__(root, bg=self.BG)
+        self.withdraw()  # до исключения из захвата — ни одного кадра на экране
+        self.overrideredirect(True)
+        self.attributes("-topmost", True, "-alpha", 0.98)
+        font = tkfont.Font(font=F["mono_m"])
+        H, B = self.H, self.BTN
+        # слово и время — отдельными колонками под самый длинный текст: цифры не прыгают, плашка не меняет ширину
+        tx = 36 + font.measure("PAUSE ")
+        bx = tx + font.measure("000:00") + 12
+        W_ = bx + 2 * B + 4 + 6
+        c = self.c = tk.Canvas(self, width=W_, height=H, bg=self.BG, highlightthickness=0, bd=0, cursor="fleur")
+        c.pack()
+        self.dot = c.create_oval(16, H / 2 - 5, 26, H / 2 + 5, fill=RED, outline="")
+        self.word = c.create_text(36, H / 2, text="REC", anchor="w", fill=self.FG, font=font)
+        self.time = c.create_text(tx, H / 2, text="00:00", anchor="w", fill=self.FG, font=font)
+        c.create_line(bx - 8, H / 2 - 10, bx - 8, H / 2 + 10, fill="#3A3A3A")
+        y0 = (H - B) / 2
+        self.pause_bg = c.create_rectangle(bx, y0, bx + B, y0 + B, fill=self.BG, outline="", tags="pause")
+        cx, cy = bx + B / 2, H / 2
+        self.bars = [c.create_rectangle(cx - 6, cy - 7, cx - 2, cy + 7, fill=self.FG, outline="", tags="pause"),
+                     c.create_rectangle(cx + 2, cy - 7, cx + 6, cy + 7, fill=self.FG, outline="", tags="pause")]
+        self.play = c.create_polygon(cx - 4, cy - 7, cx - 4, cy + 7, cx + 7, cy, fill=self.FG, outline="",
+                                     tags="pause", state="hidden")
+        sx = bx + B + 4
+        self.stop_bg = c.create_rectangle(sx, y0, sx + B, y0 + B, fill=self.BG, outline="", tags="stop")
+        c.create_rectangle(sx + B / 2 - 6, cy - 6, sx + B / 2 + 6, cy + 6, fill=RED, outline="", tags="stop")
+        for tag, bg, cmd in (("pause", self.pause_bg, on_pause), ("stop", self.stop_bg, on_stop)):
+            c.tag_bind(tag, "<Button-1>", lambda e, cmd=cmd: cmd())
+            c.tag_bind(tag, "<Enter>", lambda e, bg=bg: (c.itemconfig(bg, fill=self.HOVER), c.config(cursor="hand2")))
+            c.tag_bind(tag, "<Leave>", lambda e, bg=bg: (c.itemconfig(bg, fill=self.BG), c.config(cursor="fleur")))
+        self.drag, self.on_moved = None, on_moved
+        c.bind("<ButtonPress-1>", self.drag_start)
+        c.bind("<B1-Motion>", self.drag_move)
+        c.bind("<ButtonRelease-1>", self.drag_end)
+        self.update_idletasks()
+        u, hwnd = wc.user32, W.HWND(int(self.wm_frame(), 16))
+        self.hwnd = hwnd
+        if exclude and not u.SetWindowDisplayAffinity(hwnd, 0x11):  # WDA_EXCLUDEFROMCAPTURE
+            self.destroy()
+            raise OSError(t("Windows не умеет прятать значок записи от захвата экрана (нужна Windows 10 2004 или новее)"))
+        # нет в панели задач и Alt+Tab, клик не забирает фокус
+        u.SetWindowLongW(hwnd, -20, u.GetWindowLongW(hwnd, -20) | 0x80 | 0x80000 | 0x08000000)
+        pref = C.c_int(2)  # скруглённые углы, как у окон Windows 11 (на Windows 10 — просто прямоугольник)
+        C.windll.dwmapi.DwmSetWindowAttribute(hwnd, 33, C.byref(pref), 4)
+        self.deiconify()
+        self.update_idletasks()
+        r = W.RECT()
+        with wc.physical():  # координаты экранов — в настоящих пикселях
+            u.GetWindowRect(hwnd, C.byref(r))
+            if not (pos and any(m["left"] <= pos[0] < m["left"] + m["width"] and m["top"] <= pos[1] < m["top"] +
+                                m["height"] for m in wc.list_monitors())):  # не ставили или того монитора нет
+                m = round(16 * display["dpi"] / 96)  # правый верхний угол записываемого экрана
+                pos = (display["left"] + display["width"] - (r.right - r.left) - m, display["top"] + m)
+            self.move(*pos)
+
+    def move(self, x, y):
+        wc.user32.SetWindowPos(self.hwnd, W.HWND(-1), int(x), int(y), 0, 0, 0x1 | 0x10)  # TOPMOST; NOSIZE|NOACTIVATE
+
+    def cursor_window(self):
+        """(курсор, левый верх плашки) в настоящих пикселях."""
+        pt, r = W.POINT(), W.RECT()
+        with wc.physical():
+            wc.user32.GetCursorPos(C.byref(pt))
+            wc.user32.GetWindowRect(self.hwnd, C.byref(r))
+        return (pt.x, pt.y), (r.left, r.top)
+
+    def drag_start(self, e):
+        on_button = {"pause", "stop"} & set(self.c.gettags("current"))
+        self.drag = None if on_button else self.cursor_window()
+
+    def drag_move(self, e):
+        if self.drag:
+            (cx, cy), (wx, wy) = self.drag
+            (x, y), _ = self.cursor_window()
+            with wc.physical():
+                self.move(wx + x - cx, wy + y - cy)
+
+    def drag_end(self, e):
+        if self.drag and self.on_moved:
+            self.on_moved(*self.cursor_window()[1])
+        self.drag = None
+
+    def show(self, seconds, paused, blink):
+        c = self.c
+        c.itemconfig(self.word, text="PAUSE" if paused else "REC", fill=MUTE if paused else self.FG)
+        c.itemconfig(self.time, text=f"{seconds // 60:02d}:{seconds % 60:02d}", fill=MUTE if paused else self.FG)
+        c.itemconfig(self.dot, fill=MUTE if paused else RED if blink else self.DIM)
+        for b in self.bars:  # на паузе вместо «пауза» — «продолжить»
+            c.itemconfig(b, state="hidden" if paused else "normal")
+        c.itemconfig(self.play, state="normal" if paused else "hidden")
+
+
 class LivePreview(tk.Canvas):
     """Чёрный «рельеф» с пиксельными краями и цифрами, как в «Сапёре». Внутри курсор повторяет мышь со
     сглаживанием, анимацией клика и шлейфом — с текущими настройками. Рука оставляет затухающий
@@ -327,7 +430,7 @@ class LivePreview(tk.Canvas):
         Спрайты собираются по мере надобности — их сотни, а нужны единицы."""
         rc = self.app.cfg["render"]
         sig = (rc["click_scale"], rc["click_tilt_deg"], rc["blur_opacity"], rc["blur_length"], rc["cursor_scale"],
-               rc["motion_tilt_right_deg"], rc["motion_tilt_left_deg"])
+               rc["motion_tilt_right_deg"], rc["motion_tilt_left_deg"], rc["morph_bounce"])
         now = time.perf_counter()
         if sig != self.sig:  # пересобрать спрайты, когда ползунок замер на 0.15 с (не на каждом шаге)
             if sig != self.sig_seen:
@@ -343,7 +446,7 @@ class LivePreview(tk.Canvas):
                     self.sets[(n, "big")] = wc.cursor_sprite(n, size * 4, self.custom)
                 return self.sets[(n, "big")]
             if isinstance(ghost, str):  # шаг смены вида: ghost — прежний вид, level — шаг
-                img, hot = render.morph_sprite(*big(ghost), *big(name), level / render.MORPH_STEPS)
+                img, hot = render.morph_sprite(*big(ghost), *big(name), level / render.MORPH_STEPS, rc["morph_bounce"])
             elif ghost is not None:
                 _, hot, img = self.cursor(name, 0, tilt)
                 a = render.ghost_alphas(rc)[ghost]
@@ -906,6 +1009,7 @@ class App:
         self.renderer = ThreadPoolExecutor(1)     # рендеры по очереди
         self.recorder = self.hotkey = None
         self.state, self.rec_t0, self.pending, self.cancel, self._save_job = "offline", 0, 0, False, None
+        self.overlay = None  # значок записи в углу экрана
         self.folder_pending = False  # папка выбрана без связи с OBS — применить при подключении
         self.monitors = wc.list_monitors()
         self.detected, self.last_fps, self.log_lines, self.log_win = None, None, [], None
@@ -921,7 +1025,7 @@ class App:
         mono = pick("SF Mono", "IBM Plex Mono", "Consolas")
         F.update(head=(sans, -74), body=(sans, 10), small=(sans, 9), para=(sans, 11), caps=(sans_m, 8),
                  nav=(sans, 9), brand=(sans_m, 10), btn=(sans_m, 10), btn_b=(sans_m, 11),
-                 mono=(mono, 10), mono_s=(mono, 8), mono_b=(mono, 15))
+                 mono=(mono, 10), mono_s=(mono, 8), mono_b=(mono, 15), mono_m=(mono, 11))
 
         root.title(APP)
         # Вёрстка в пикселях; на маленьком экране (1366×768) — узкие поля и прокрутка вместо обрезанного низа
@@ -935,6 +1039,20 @@ class App:
         root.option_add("*Font", F["body"])
         self.style()
         self.build()
+        # высота — под самую высокую вкладку, чтобы настройки было видно без прокрутки (но не выше экрана:
+        # снизу панель задач, сверху заголовок окна)
+        work = W.RECT()  # рабочая область экрана — без панели задач
+        wc.user32.SystemParametersInfoW(0x30, 0, C.byref(work), 0)  # SPI_GETWORKAREA
+        need, room = self.tallest(), (work.bottom - work.top or sh - 48) - 40  # 40 — заголовок окна и рамка
+        if need > room:  # не влезает по высоте — сначала за счёт пустых полей сверху и снизу
+            cut = min(need - room, sum(self.pady) - 12)
+            top = cut * self.pady[0] // sum(self.pady)
+            self.pady = (self.pady[0] - top, self.pady[1] - (cut - top))
+            self.page_frame.pack_configure(pady=self.pady)
+            need = self.tallest()
+        h = min(max(need, min(960, sh - 100)), room)
+        root.geometry(f"{min(1460, sw - 40)}x{h}+{max(0, (sw - min(1460, sw - 40)) // 2)}"
+                      f"+{max(work.top, work.top + (room - h) // 2)}")
 
         h = logging.Handler()
         h.emit = lambda r: self.post(self.append_log, h.format(r), r.levelno)
@@ -1050,8 +1168,10 @@ class App:
             s = int(s)
             self.time_lbl.config(text=f"{s // 60:02d}:{s % 60:02d}" + ("  " + t("пауза") if paused else ""),
                                  fg=MUTE if paused else INK)
-            self.rec_dot.config(text="❚❚" if paused else "■",
-                                fg=MUTE if paused else RED if int(time.time() - self.rec_t0) % 2 == 0 else BG)
+            blink = int(time.time() - self.rec_t0) % 2 == 0
+            self.rec_dot.config(text="❚❚" if paused else "■", fg=MUTE if paused else RED if blink else BG)
+            if self.overlay:
+                self.overlay.show(s, paused, blink)
 
     def schedule_save(self):
         if self._save_job:
@@ -1078,7 +1198,7 @@ class App:
         self.root.bind_all("<MouseWheel>", self.wheel)
         self.root.bind_all("<Control-KeyPress>", edit_keys)
         self.root.bind_all("<Button-1>", click_focus)
-        page = tk.Frame(self.holder, bg=BG)  # «паспарту»: всё вписано в невидимую рамку с большими полями
+        self.page_frame = page = tk.Frame(self.holder, bg=BG)  # «паспарту»: всё вписано в невидимую рамку с полями
         page.pack(fill="both", expand=True, padx=self.padx, pady=self.pady)
 
         # верх: знак слева, навигация справа — как у референса
@@ -1135,6 +1255,10 @@ class App:
         self.time_lbl = self.lbl(row, "00:00", "mono_b", LINE)
         self.time_lbl.pack(side="left", padx=(6, 0))
         self.toggle_row(left, t("Рендерить сразу после записи"), "ui.auto_render").pack(anchor="w", pady=(14, 0))
+        ov = self.toggle_row(left, t("Значок записи в углу экрана"), "ui.rec_overlay", self.sync_overlay)
+        ov.pack(anchor="w", pady=(6, 0))
+        self.hint_on((ov, *ov.winfo_children()), "Значок записи",
+                     "в углу экрана: идёт ли запись, пауза и стоп; перетаскивается мышью. На видео его нет.")
         now = tk.Frame(left, bg=BG)
         now.pack(anchor="w", pady=(22, 0))
         top_now = tk.Frame(now, bg=BG)
@@ -1185,8 +1309,19 @@ class App:
         self.set_state(self.state)
         self.set_spec()
 
+    def tallest(self):
+        """Высота страницы с самой высокой вкладкой, px."""
+        cur, h = self.page, 0
+        for name in self.pages:
+            self.show(name)
+            self.holder.update_idletasks()
+            h = max(h, self.holder.winfo_reqheight())
+        self.show(cur)
+        return h
+
     def fit_page(self):
         """Страница во всю ширину; по высоте — не меньше окна, а если не влезает — появляется прокрутка."""
+        self.holder.update_idletasks()  # иначе высота — от прошлой вкладки: Tk ещё не разложил новую
         sc, need = self.scroller, self.holder.winfo_reqheight()
         w, h = sc.winfo_width(), max(sc.winfo_height(), need)
         sc.itemconfig(self.holder_win, width=w, height=h)
@@ -1676,6 +1811,9 @@ class App:
         self.slider(g, 0, "Длительность", "render.morph_ms", 100, 800, 10,
                     "мс: прежний вид сжимается в точку, новый вырастает из неё с отскоком — стрелка → рука, "
                     "инструменты Premiere и DaVinci.")
+        self.slider(g, 1, "Отскок", "render.morph_bounce", 0, 0.4, 0.01,
+                    "На сколько новый вид проскакивает крупнее, прежде чем встать на место. 0 — без отскока.",
+                    fmt=lambda v: f"{round(v * 100)}%")
         g, _ = self.section(r, "Курсор")
         self.slider(g, 0, "Размер", "render.cursor_scale", 0.5, 3, 0.05,
                     "1 — как в системе, с учётом масштаба экрана и масштаба захвата в сцене OBS.")
@@ -1792,6 +1930,7 @@ class App:
         self.rec_btn.set_enabled(state != "busy")
         self.key_lbl.config(text=self.cfg["hotkey"])
         if state != "recording":
+            self.sync_overlay()
             self.time_lbl.config(text="00:00", fg=LINE)
             self.rec_dot.config(text="■", fg=CARD)
         else:
@@ -1918,6 +2057,39 @@ class App:
     def on_started(self):
         self.rec_t0 = time.time()
         self.set_state("recording")
+        self.sync_overlay()
+
+    def overlay_moved(self, x, y):
+        self.cfg["ui"]["overlay_pos"] = [x, y]  # в следующий раз — там же
+        self.schedule_save()
+
+    def toggle_pause(self):
+        """Пауза записи в OBS и обратно (кнопка на значке записи)."""
+        if self.state != "recording":
+            return
+
+        def work():
+            try:
+                self.recorder.obs.pause_toggle()
+            except Exception as e:
+                log.error(t("Не удалось поставить запись на паузу: %s"), e)
+
+        self.worker.submit(work)
+
+    def sync_overlay(self):
+        """Значок записи в углу записываемого экрана: есть, пока идёт запись и он включён."""
+        want = self.cfg["ui"]["rec_overlay"] and self.state == "recording" and self.recorder and self.recorder.recording
+        if want and not (self.overlay and self.overlay.winfo_exists()):
+            try:
+                self.overlay = RecOverlay(self.root, self.recorder.rec[0].display, self.toggle_pause, self.toggle,
+                                          self.cfg["ui"]["overlay_pos"], self.overlay_moved)
+            except (OSError, tk.TclError) as e:
+                self.overlay = None
+                log.warning("%s", e)
+        elif not want and self.overlay:
+            if self.overlay.winfo_exists():
+                self.overlay.destroy()
+            self.overlay = None
 
     def on_stopped(self, parts):
         self.set_state("idle")

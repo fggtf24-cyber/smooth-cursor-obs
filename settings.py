@@ -35,6 +35,7 @@ DEFAULTS = {
         "click_ms": 320,
         "morph_animation": False,  # смена вида курсора (стрелка → рука, инструменты) — анимацией, а не за кадр
         "morph_ms": 450,
+        "morph_bounce": 0.12,  # на сколько новый вид проскакивает крупнее при смене (0 — без отскока)
         "motion_tilt_right_deg": 0,  # поворот на ходу от позы Windows в сторону движения, °: едет вправо — вправо
         "motion_tilt_left_deg": 0,   # едет влево — влево (минус — назад, как от инерции), 0 — выключен
         "motion_blur": True,
@@ -45,7 +46,8 @@ DEFAULTS = {
         "debug_raw": False,
         "export_keyframes": False,
     },
-    "ui": {"folder": "", "auto_render": True, "preview_start": 0.0, "preview_len": 5.0, "lang": "ru",
+    "ui": {"folder": "", "auto_render": True, "rec_overlay": True, "overlay_pos": None, "preview_start": 0.0,
+           "preview_len": 5.0, "lang": "ru",
            "onboarded": False, "skip_version": "", "ae_intro": False, "premiere_plugin": ""},
     # folder — папка записей OBS; skip_version — «не сейчас»; ae_intro — окно про After Effects уже показано;
     # premiere_plugin — какая версия плагина для Premiere поставлена

@@ -331,6 +331,9 @@ def check_morph():
     step, prev = render.morph_steps(kind, vis, 30, 160)
     assert step[:2].tolist() == [0, 0] and (np.diff(step[2:7]) > 0).all() and step[2] >= 1 and step[7:].sum() == 0, step
     assert (prev[2:7] == 0).all(), prev
+    for amount in (0, 0.12, 0.3):  # отскок: проскакивает ровно на заданное, в конце — ровно 1 и без рывка
+        g = [render.bounce_curve(u, amount) for u in np.linspace(0, 1, 401)]
+        assert abs(max(g) - 1 - amount) < 0.002 and g[0] == 0 and abs(g[-1] - 1) < 1e-9 and abs(g[-1] - g[-2]) < 1e-3,             ("отскок", amount, max(g))
     # с наклоном в движении: спрайты перехода без наклона — к смене вида он сходит на нет и возвращается, без рывка
     cfg = copy.deepcopy(settings.DEFAULTS)
     cfg["render"].update(morph_animation=True, motion_tilt_right_deg=72, motion_tilt_left_deg=27)
