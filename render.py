@@ -230,16 +230,16 @@ def tag(stream, key):
     return "bt709" if v in ("unknown", "reserved") else v
 
 
-def make_sprites(work, types, poses, size, rc):
+def make_sprites(work, types, poses, size, rc, custom=None):
     """PNG для каждого слота; возвращает [(слот, файл, hot_x, hot_y)] в порядке наложения (снизу вверх).
     poses — {(тип, шаг клика, шаг наклона)}, которые есть в видео: спрайты только для них."""
     big = {}
 
     def pose(t, lvl, k):
         if not lvl and not k:
-            return wc.cursor_sprite(t, size)
+            return wc.cursor_sprite(t, size, custom)
         if t not in big:  # поворот с 4× запасом и уменьшение — без мыла и лесенки
-            big[t] = wc.cursor_sprite(t, size * 4)
+            big[t] = wc.cursor_sprite(t, size * 4, custom)
         return pose_sprite(*big[t], rc, lvl, k)
 
     mains = {p: pose(*p) for p in sorted({(t, 0, 0) for t in types} | set(poses))}
@@ -518,7 +518,8 @@ def render(video, log_path, cfg, progress=None, clip=None):
 
     with tempfile.TemporaryDirectory(prefix="smooth_cursor_") as tmp:
         work = Path(tmp)
-        slots = make_sprites(work, used, poses, size, {**rc, "motion_blur": rc["motion_blur"] and not accurate})
+        slots = make_sprites(work, used, poses, size, {**rc, "motion_blur": rc["motion_blur"] and not accurate},
+                             lg.get("custom"))
         blur = layers = None
         if accurate:  # курсор — один слой, кадры которого считаем здесь и подаём ffmpeg через stdin
             sprites = {name: (np.asarray(Image.open(work / png), np.float32), (hx, hy))

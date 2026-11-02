@@ -205,6 +205,12 @@ class Obs:
             raise RuntimeError(t("OBS не подтвердил старт записи за 10 с"))
         return self.t_started
 
+    def elapsed(self):
+        """(секунд на видео, на паузе ли сейчас) — для таймера в окне."""
+        now = time.perf_counter_ns()
+        paused = sum((b or now) - a for a, b in self.pauses)
+        return (now - self.t_started - paused) / 1e9, bool(self.pauses) and self.pauses[-1][1] is None
+
     def stop(self):
         resp = self.req.stop_record()
         self.stopped.wait(60)  # STOPPED приходит, когда файл дописан

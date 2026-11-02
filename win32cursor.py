@@ -1,7 +1,9 @@
 """Win32 через ctypes: DPI awareness, поиск дисплея, логгер курсора, спрайты системных курсоров."""
+import base64
 import contextlib
 import ctypes as C
 import ctypes.wintypes as W
+import io
 import os
 import re
 import threading
@@ -149,6 +151,8 @@ class CursorLogger:
     def __init__(self, display, hz=240):
         self.display, self.period = display, 1e9 / hz
         self.samples = []  # (t_ns, x, y, type_idx, showing)
+        self.types, self.custom = list(TYPES), {}  # + свои курсоры программ: имя → снимок (см. _capture)
+        self.ref = cursor_base_size() * display["dpi"] / 96  # размер системного курсора на экране при записи
         self.clicks = []   # (t_ns, "L"/"R", down 1/0, x, y)
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -162,16 +166,21 @@ class CursorLogger:
 
     def _run(self):
         handles = {user32.LoadCursorW(None, cid): i for i, (cid, _) in enumerate(CURSORS.values())}
-        ci, pt = CURSORINFO(cbSize=C.sizeof(CURSORINFO)), W.POINT()
+        ci, pt, seen = CURSORINFO(cbSize=C.sizeof(CURSORINFO)), W.POINT(), {}
         left, top = self.display["left"], self.display["top"]
         buttons, prev = {"L": 0x01, "R": 0x02}, {"L": False, "R": False}  # VK_LBUTTON, VK_RBUTTON
         nxt = time.perf_counter_ns()
         while not self._stop.is_set():
             t = time.perf_counter_ns()
             user32.GetCursorPos(C.byref(pt))
-            user32.GetCursorInfo(C.byref(ci))
+            ci.cbSize = C.sizeof(CURSORINFO)  # Windows 11 обнуляет cbSize после вызова, и следующий падает
+            if not user32.GetCursorInfo(C.byref(ci)):
+                ci.hCursor, ci.flags = None, 1  # не знаем, что за курсор: стрелка, но видимая
             x, y = pt.x - left, pt.y - top
-            self.samples.append((t, x, y, handles.get(ci.hCursor, 0), ci.flags & 1))  # CURSOR_SHOWING
+            k = handles.get(ci.hCursor)
+            if k is None:  # не системный курсор — снимаем картинку один раз на хэндл
+                k = handles[ci.hCursor] = self._capture(ci.hCursor, seen)
+            self.samples.append((t, x, y, k, ci.flags & 1))  # CURSOR_SHOWING
             for b, vk in buttons.items():
                 down = user32.GetAsyncKeyState(vk) < 0
                 if down != prev[b]:
@@ -183,6 +192,23 @@ class CursorLogger:
                 time.sleep(delay / 1e9)
             else:
                 nxt = time.perf_counter_ns()  # отстали — не догоняем пачкой
+
+    def _capture(self, h, seen):
+        """Свой курсор программы (инструменты Premiere и т. п.): картинка в родном размере уходит в лог,
+        одинаковые картинки с разными хэндлами — один тип. 0 (стрелка), если снять не вышло."""
+        sp = handle_sprite(h) if h else None
+        if not sp:
+            return 0
+        img, hot = sp
+        key = img.tobytes() + repr(hot).encode()
+        if key not in seen:
+            buf = io.BytesIO()
+            img.save(buf, "PNG")
+            name = f"custom{len(self.custom)}"
+            self.custom[name] = {"png": base64.b64encode(buf.getvalue()).decode(), "hot": hot, "ref": self.ref}
+            self.types.append(name)
+            seen[key] = len(self.types) - 1
+        return seen[key]
 
     def to_dict(self, t0_ns, pauses=(), end_ns=None):
         """Лог для файла записи, начатого в t0_ns (и законченного в end_ns, если OBS разбил запись на файлы).
@@ -209,8 +235,8 @@ class CursorLogger:
         for t, b, d, x, y in self.clicks:
             if lo <= t <= hi and not ((m := at(t))[1] and d):  # нажатие в паузе на видео не попало, отпускание — на склейке
                 clicks.append([m[0], b, d, x, y])
-        return {"version": 1, "display": self.display, "hz": round(1e9 / self.period), "types": TYPES,
-                "samples": samples, "clicks": clicks}
+        return {"version": 1, "display": self.display, "hz": round(1e9 / self.period), "types": self.types,
+                "custom": self.custom, "samples": samples, "clicks": clicks}
 
 
 def running_exe(name):
@@ -274,24 +300,39 @@ def cursor_file_max(name):
         return 0
 
 
-def cursor_sprite(name, size):
-    """Текущий системный курсор как RGBA size×size и его hotspot (x, y)."""
+def cursor_sprite(name, size, custom=None):
+    """Курсор как RGBA и его hotspot (x, y): системный — size×size по текущей схеме Windows; свой курсор программы
+    из лога (custom: {имя: снимок из CursorLogger}) — снимок в масштабе size к системному курсору при записи."""
+    if custom and name in custom:
+        c = custom[name]
+        img = Image.open(io.BytesIO(base64.b64decode(c["png"]))).convert("RGBA")
+        k = size / c["ref"]
+        w, h = max(1, round(img.width * k)), max(1, round(img.height * k))
+        return img.resize((w, h), Image.LANCZOS), (c["hot"][0] * w / img.width, c["hot"][1] * h / img.height)
     cid, reg = CURSORS.get(name, CURSORS["arrow"])
     path = _cursor_file(reg)
     h = user32.LoadImageW(None, path, 2, size, size, 0x10) if path else None  # IMAGE_CURSOR, LR_LOADFROMFILE
     shared = not h
     if shared:  # схема без файла — встроенный курсор
         h = user32.LoadImageW(None, cid, 2, 0, 0, 0x8000)  # LR_SHARED
+    out = handle_sprite(h, size)
+    if not shared:
+        user32.DestroyCursor(h)
+    return out
+
+
+def handle_sprite(h, size=0):
+    """Курсор по HCURSOR (в т. ч. чужой программы) как RGBA size×size и hotspot; size=0 — родной размер."""
     ii, bm = ICONINFO(), BITMAP()
-    user32.GetIconInfo(h, C.byref(ii))
+    if not user32.GetIconInfo(h, C.byref(ii)):
+        return None
     gdi32.GetObjectW(ii.hbmMask, C.sizeof(BITMAP), C.byref(bm))
+    size = size or bm.bmWidth
     hot = (ii.xHotspot * size / bm.bmWidth, ii.yHotspot * size / bm.bmWidth)
     for b in (ii.hbmMask, ii.hbmColor):
         if b:
             gdi32.DeleteObject(b)
     black, white = _draw(h, size, 0), _draw(h, size, 255)
-    if not shared:
-        user32.DestroyCursor(h)
 
     diff = (white - black).mean(-1)  # = 255·(1−α); у инвертирующих пикселей отрицательно
     a = np.clip(1 - diff / 255, 0, 1)

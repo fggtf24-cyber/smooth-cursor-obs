@@ -26,6 +26,7 @@ EN = {
         "could not connect to OBS ws://{}:{} ({}). Is OBS running? Is the WebSocket server enabled "
         "(Tools → WebSocket Server Settings)? Are the port and password right?",
     "● Запись идёт": "● Recording",
+    "пауза": "paused",
     "OBS настроен: сцена «%s», %s %dx%d @ %d fps": "OBS is set up: scene “%s”, %s %dx%d @ %d fps",
     "Не удалось остановить запись в OBS: %s": "Could not stop the recording in OBS: %s",
     "■ Запись остановлена: %s": "■ Recording stopped: %s",

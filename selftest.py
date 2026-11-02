@@ -310,10 +310,23 @@ def check_presets():
     print("пресеты: ок")
 
 
+def check_custom_cursor():
+    """Свой курсор программы (не из схемы Windows): снимок в лог, одинаковые хэндлы — один тип, рендер в масштабе."""
+    lg = wc.CursorLogger({"left": 0, "top": 0, "dpi": 96})
+    h = wc.user32.LoadImageW(None, r"C:\Windows\Cursors\aero_pen.cur", 2, 0, 0, 0x50)  # LR_LOADFROMFILE | DEFAULTSIZE
+    seen = {}
+    assert lg._capture(h, seen) == lg._capture(h, seen) == len(wc.TYPES) and lg._capture(None, seen) == 0
+    custom = json.loads(json.dumps(lg.to_dict(0)))["custom"]
+    img, _ = wc.cursor_sprite("custom0", round(lg.ref * 2), custom)
+    assert img.width == round(lg.custom["custom0"]["ref"] * 2) and img.getchannel("A").getextrema()[1] == 255
+    print("свой курсор программы: ок")
+
+
 if __name__ == "__main__":
     check_presets()
     check_smoothing()
     check_click_animation()
+    check_custom_cursor()
     check_obs_transform()
     check_ae()
     check_render()

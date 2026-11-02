@@ -186,7 +186,7 @@ def export(video, log_path, cfg):
             break
         name = types[k] if k < len(types) else "arrow"
         px = max(size * SPRITE_X, wc.cursor_file_max(name))
-        img, (hx, hy) = wc.cursor_sprite(name, px)
+        img, (hx, hy) = wc.cursor_sprite(name, px, lg.get("custom"))
         png = out / f"cursor_{name}.png"
         img.save(png)
         sprites.append({"type": name, "png": str(png), "w": img.width, "h": img.height, "hx": hx, "hy": hy,

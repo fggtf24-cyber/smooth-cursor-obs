@@ -1019,10 +1019,13 @@ class App:
             except Exception:
                 if fn != self.append_log:
                     log.error(traceback.format_exc())
-        if self.state == "recording":
-            s = int(time.time() - self.rec_t0)
-            self.time_lbl.config(text=f"{s // 60:02d}:{s % 60:02d}")
-            self.rec_dot.config(fg=RED if s % 2 == 0 else BG)
+        if self.state == "recording" and self.recorder:
+            s, paused = self.recorder.obs.elapsed()  # время видео: паузы OBS не считаются
+            s = int(s)
+            self.time_lbl.config(text=f"{s // 60:02d}:{s % 60:02d}" + ("  " + t("пауза") if paused else ""),
+                                 fg=MUTE if paused else INK)
+            self.rec_dot.config(text="❚❚" if paused else "■",
+                                fg=MUTE if paused else RED if int(time.time() - self.rec_t0) % 2 == 0 else BG)
 
     def schedule_save(self):
         if self._save_job:
@@ -1758,7 +1761,7 @@ class App:
         self.key_lbl.config(text=self.cfg["hotkey"])
         if state != "recording":
             self.time_lbl.config(text="00:00", fg=LINE)
-            self.rec_dot.config(fg=CARD)
+            self.rec_dot.config(text="■", fg=CARD)
         else:
             self.time_lbl.config(fg=INK)
         if state == "offline" and self.spec.get("obs") != "offline":
