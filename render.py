@@ -130,7 +130,7 @@ def smooth_tilt(deg, fps):
 def frame_tilt(v, ok, level, fps, right_deg, left_deg, step=TILT_STEP_DEG):
     """Наклон по кадрам, в шагах step (None — в градусах, без округления): tilt_angle по скорости v (там, где не ok,
     — 0), сглаженный по времени.
-    На кадрах анимации клика (level > 0) — 0: у клика свой поворот, а пары «шаг клика × шаг наклона» дали бы сотни
+    На кадрах анимации клика (level > 0; смены вида курсора — тоже) — 0: у клика свой поворот, а пары «шаг клика × шаг наклона» дали бы сотни
     спрайтов. Рендер знает будущее, поэтому наклон плавно сходит на нет к клику и возвращается после него
     (за TILT_RAMP_MS, по smoothstep) — без рывка даже при клике на полном ходу."""
     n = np.arange(len(level))
@@ -513,10 +513,11 @@ def cursor_track(lg, info, cfg, ghost_ms=()):
     v = np.gradient(track["vx"]) * fps / info["w"] if len(vis) > 1 else np.zeros(len(vis))
     # там, где курсор появляется или пропадает, разница позиций — скачок, а не скорость
     ok = vis & np.r_[vis[1:], True] & np.r_[True, vis[:-1]]
-    track["tilt_deg"] = np.where(vis, frame_tilt(v, ok, track["level"], fps, rc["motion_tilt_right_deg"],
-                                                 rc["motion_tilt_left_deg"], step=None), 0.0)
-    track["tilt"] = np.round(track["tilt_deg"] / TILT_STEP_DEG).astype(int)
     track["morph"], track["prev"] = morph_steps(track["type"], vis, fps, rc["morph_ms"]) if rc["morph_animation"]         else (np.zeros(len(vis), int), track["type"])
+    # смена вида курсора — как клик: спрайты перехода без наклона, поэтому наклон к ней плавно сходит на нет
+    track["tilt_deg"] = np.where(vis, frame_tilt(v, ok, np.maximum(track["level"], track["morph"]), fps,
+                                                 rc["motion_tilt_right_deg"], rc["motion_tilt_left_deg"], step=None), 0.0)
+    track["tilt"] = np.round(track["tilt_deg"] / TILT_STEP_DEG).astype(int)
     zoom = abs(kx * ky * (a * e - b * d)) ** 0.5  # во сколько раз захват увеличен на видео
     size = max(4, round(wc.cursor_base_size() * disp["dpi"] / 96 * rc["cursor_scale"] * zoom))
     return track, to_video, (cl, ct, cr, cb), size

@@ -331,6 +331,16 @@ def check_morph():
     step, prev = render.morph_steps(kind, vis, 30, 160)
     assert step[:2].tolist() == [0, 0] and (np.diff(step[2:7]) > 0).all() and step[2] >= 1 and step[7:].sum() == 0, step
     assert (prev[2:7] == 0).all(), prev
+    # с наклоном в движении: спрайты перехода без наклона — к смене вида он сходит на нет и возвращается, без рывка
+    cfg = copy.deepcopy(settings.DEFAULTS)
+    cfg["render"].update(morph_animation=True, motion_tilt_right_deg=72, motion_tilt_left_deg=27)
+    t = np.arange(-200, 3000, 1000 / 240)
+    x = np.clip(100 + 1.0 * (t - 200), 100, 3000)  # едет вправо, в 1000 мс стрелка → текстовый курсор
+    lg = {"display": {"width": 3840, "height": 1080, "dpi": 96}, "types": wc.TYPES, "clicks": [],
+          "samples": [[a, float(b), 300.0, int(a >= 1000), 1] for a, b in zip(t.tolist(), x)]}
+    tr = render.cursor_track(lg, {"w": 3840, "h": 1080, "fps": 30, "frames": 80}, cfg)[0]
+    m = tr["morph"] > 0
+    assert m.any() and not tr["tilt"][m].any() and np.abs(np.diff(tr["tilt_deg"])).max() < 8,         ("наклон рывком у смены вида", np.abs(np.diff(tr["tilt_deg"])).max())
     old, new = wc.cursor_sprite("arrow", 128), wc.cursor_sprite("hand", 128)
     for p, like in ((0.05, old), (0.95, new)):
         img, (hx, hy) = render.morph_sprite(*old, *new, p)
