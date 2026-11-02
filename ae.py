@@ -194,7 +194,21 @@ def export(video, log_path, cfg):
         kinds.append(k)
     # один слой курсора: несколько видов — прекомпозиция, кадр i — вид i, hotspot у всех в точке box[0:2];
     # какой вид сейчас — Time Remap с удержанием (пока курсор не виден, вид прежний)
+    # шаги смены вида курсора — тоже кадры прекомпозиции, после видов
+    mv = vis & (track["morph"] > 0)
+    morphs = sorted({(a, b, m) for a, b, m in zip(*(track[c][mv].tolist() for c in ("prev", "type", "morph")))})
+    px = size * SPRITE_X
+    for a, b, m in morphs:
+        na, nb = (types[x] if x < len(types) else "arrow" for x in (a, b))
+        img, (hx, hy) = render.morph_sprite(*wc.cursor_sprite(na, px, lg.get("custom")),
+                                            *wc.cursor_sprite(nb, px, lg.get("custom")), m / render.MORPH_STEPS, 1)
+        png = out / f"cursor_m{m}_{na}_{nb}.png"
+        img.save(png)
+        sprites.append({"type": f"m{m}_{na}_{nb}", "png": str(png), "w": img.width, "h": img.height, "hx": hx, "hy": hy,
+                        "scale": 100 * size / px})
     kind = np.select([track["type"] == k for k in kinds], range(len(kinds)), 0)
+    for i, (a, b, m) in enumerate(morphs, len(kinds)):
+        kind[mv & (track["prev"] == a) & (track["type"] == b) & (track["morph"] == m)] = i
     kind = kind[np.maximum.accumulate(np.where(vis, np.arange(len(vis)), 0))]  # вид последнего видимого кадра
     r = [sp["scale"] / sprites[0]["scale"] for sp in sprites]  # плотность пикселей относительно основного вида
     left, top = max(sp["hx"] * q for sp, q in zip(sprites, r)), max(sp["hy"] * q for sp, q in zip(sprites, r))

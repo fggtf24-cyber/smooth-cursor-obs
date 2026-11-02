@@ -300,6 +300,7 @@ class LivePreview(tk.Canvas):
         self.drawn = None  # что нарисовано в прошлом кадре — то же самое не перерисовываем
         self.handles = {wc.user32.LoadCursorW(None, cid): n for n, (cid, _) in wc.CURSORS.items()}
         self.custom = {}  # свои курсоры программ (инструменты Premiere и т. п.): имя → снимок wc.snapshot
+        self.shown, self.morph = None, None  # какой вид курсора показан; смена вида: (прежний, когда началась)
         self.sets, self.sig, self.sig_seen, self.sig_t = {}, None, None, 0
         self.pt, self.ci = W.POINT(), wc.CURSORINFO(cbSize=C.sizeof(wc.CURSORINFO))
         self.after(16, self.tick)
@@ -336,15 +337,20 @@ class LivePreview(tk.Canvas):
         key = (name, level, tilt, ghost)
         if key not in self.sets:
             size = max(8, round(30 * rc["cursor_scale"]))
-            if ghost is not None:
+
+            def big(n):
+                if (n, "big") not in self.sets:
+                    self.sets[(n, "big")] = wc.cursor_sprite(n, size * 4, self.custom)
+                return self.sets[(n, "big")]
+            if isinstance(ghost, str):  # шаг смены вида: ghost — прежний вид, level — шаг
+                img, hot = render.morph_sprite(*big(ghost), *big(name), level / render.MORPH_STEPS)
+            elif ghost is not None:
                 _, hot, img = self.cursor(name, 0, tilt)
                 a = render.ghost_alphas(rc)[ghost]
                 img = img.copy()
                 img.putalpha(img.getchannel("A").point(lambda v: round(v * a)))
             elif level or tilt:
-                if (name, "big") not in self.sets:
-                    self.sets[(name, "big")] = wc.cursor_sprite(name, size * 4, self.custom)
-                img, hot = render.pose_sprite(*self.sets[(name, "big")], rc, level, tilt)
+                img, hot = render.pose_sprite(*big(name), rc, level, tilt)
             else:
                 img, hot = wc.cursor_sprite(name, size, self.custom)
             self.sets[key] = (photo(img), hot, img)
@@ -423,6 +429,8 @@ class LivePreview(tk.Canvas):
                 ops.append((tx - 1, ty - 1, tx + 1, ty + 1, MUTE))
         if self.ci.flags & 1:
             self.cursor_ops(ops, now, mon, s, steps, down, qx, qy, rc)
+        else:
+            self.shown = None  # курсор спрятан (печатают текст) — появится сразу нужным видом, как при рендере
         if ops != self.drawn:
             self.drawn = ops
             self.delete("dyn")
@@ -441,6 +449,15 @@ class LivePreview(tk.Canvas):
             name = self.handles[self.ci.hCursor] = f"custom{len(self.custom)}" if snap else "arrow"
             if snap:
                 self.custom[name] = snap
+        if name != self.shown:
+            self.morph, self.shown = (self.shown, now) if self.shown else None, name
+        morph = 0
+        if rc["morph_animation"] and self.morph:
+            p = (now - self.morph[1]) * 1000 / rc["morph_ms"]
+            morph = min(render.MORPH_STEPS - 1, max(1, round(p * render.MORPH_STEPS))) if p < 1 else 0
+        if morph:  # смена вида — без шлейфа и клика, как при рендере
+            im, (hx, hy), _ = self.cursor(name, morph, 0, ghost=self.morph[0])
+            return ops.append((round(qx - hx, 1), round(qy - hy, 1), im))
         level = 0
         if rc["click_animation"]:
             held = np.inf if down else (self.release_t - self.press_t) * 1000  # пока ЛКМ зажата — наклон держится
@@ -1499,7 +1516,8 @@ class App:
         sb.pack(side="right", fill="y")
         self.tree.bind("<Double-1>", lambda e: self.open_selected(result=True))
 
-    PRESET_NAMES = {"standard": "Стандарт", "light": "Лёгкий", "cinema": "Кино", "tilt": "С наклоном",
+    PRESET_NAMES = {"standard": "Стандарт", "light": "Лёгкий", "cinema": "Кино",
+                    "cinema_morph": "Кино + смена курсора", "tilt": "С наклоном",
                     "tilt_back": "Наклон v2", "clean": "Без эффектов"}
 
     def accurate_blur(self):
@@ -1652,6 +1670,11 @@ class App:
                     "Градусы против часовой вокруг кончика стрелки; минус — по часовой.", fmt=lambda v: f"{v}°")
         self.slider(g, 3, "Длительность", "render.click_ms", 100, 1000, 10,
                     "мс: первая четверть — нажатие, затем плавный возврат. Пока кнопка зажата, наклон держится.")
+        g, h = self.section(l, "Смена курсора")
+        self.toggle_row(h, "включено", "render.morph_animation").pack(side="right")
+        self.slider(g, 0, "Длительность", "render.morph_ms", 100, 800, 10,
+                    "мс: прежний вид сжимается в точку, новый вырастает из неё с отскоком — стрелка → рука, "
+                    "инструменты Premiere и DaVinci.")
         g, _ = self.section(r, "Курсор")
         self.slider(g, 0, "Размер", "render.cursor_scale", 0.5, 3, 0.05,
                     "1 — как в системе, с учётом масштаба экрана и масштаба захвата в сцене OBS.")

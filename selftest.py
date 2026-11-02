@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+from PIL import Image
 
 import render
 import settings
@@ -188,7 +189,7 @@ def check_accurate_blur():
     cfg["sync"]["offset_ms"] = 0
     cfg["smoothing"] = copy.deepcopy(SM)  # не зависеть от выбранного пресета
     cfg["render"].update(codec="libx264", click_animation=True, motion_blur=True, shutter=30, debug_raw=False,
-                         export_keyframes=False, cursor_scale=1.0)
+                         export_keyframes=False, cursor_scale=1.0, morph_animation=False)  # смена курсора — за кадр
     ff = render.tool(cfg["render"]["ffmpeg"], "ffmpeg")
     args, render.encoder_args = render.encoder_args, lambda codec, cq, preset: ["-qp", "0", "-pix_fmt", "yuv420p"]
     try:  # без потерь (crf 0 — нет): сравниваем пиксели
@@ -322,11 +323,52 @@ def check_custom_cursor():
     print("свой курсор программы: ок")
 
 
+def check_morph():
+    """Анимация смены вида курсора: шаги по кадрам, спрайт перехода, рендер обоими шлейфами и слои для AE."""
+    import ae
+    kind, vis = np.array([0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 2, 2]), np.ones(13, bool)
+    vis[9:11] = False  # курсор спрятан, потом появился другим видом — без анимации
+    step, prev = render.morph_steps(kind, vis, 30, 160)
+    assert step[:2].tolist() == [0, 0] and (np.diff(step[2:7]) > 0).all() and step[2] >= 1 and step[7:].sum() == 0, step
+    assert (prev[2:7] == 0).all(), prev
+    old, new = wc.cursor_sprite("arrow", 128), wc.cursor_sprite("hand", 128)
+    for p, like in ((0.05, old), (0.95, new)):
+        img, (hx, hy) = render.morph_sprite(*old, *new, p)
+        a = np.array(img.getchannel("A")) > 128
+        ref = np.array(like[0].resize((32, 32), Image.LANCZOS).getchannel("A")) > 128
+        assert 0.6 < a.sum() / ref.sum() < 1.6, ("переход: размер", p, a.sum(), ref.sum())
+        assert -img.width < hx < 2 * img.width and -img.height < hy < 2 * img.height, ("переход: hotspot", p)
+    cfg = settings.load()
+    cfg["sync"]["offset_ms"] = 0
+    cfg["render"].update(codec="libx264", morph_animation=True, morph_ms=200, click_animation=True,
+                         motion_blur=True, debug_raw=False, export_keyframes=False)
+    ff = render.tool(cfg["render"]["ffmpeg"], "ffmpeg")
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        video = tmp / "src.mp4"
+        subprocess.run([ff, "-v", "error", "-f", "lavfi", "-i", "color=c=gray:s=1920x1080:r=30:d=1.5", "-c:v",
+                        "libx264", str(video)], check=True)
+        log = synth_log()  # стрелка → текстовый курсор в 600 мс → стрелка в 700 мс
+        (tmp / "src.cursor.json").write_text(json.dumps(log))
+        info = render.probe(render.tool(cfg["render"]["ffmpeg"], "ffprobe"), video)
+        tr = render.cursor_track(log, info, cfg)[0]
+        assert (tr["morph"] > 0).sum() >= 4, ("шагов смены вида", tr["morph"].tolist())
+        for accurate in (False, True):
+            cfg["render"]["blur_accurate"] = accurate
+            out = render.render(video, tmp / "src.cursor.json", cfg, progress=lambda pct: False)
+            assert out.exists(), out
+        jsx = ae.export(video, tmp / "src.cursor.json", cfg)[0]
+        names = [f.stem for f in jsx.parent.glob("cursor_m*.png")]
+        assert names and "cursor_m" in jsx.read_text(encoding="utf-8-sig"), ("в AE нет шагов смены вида", names)
+    print("смена вида курсора: ок")
+
+
 if __name__ == "__main__":
     check_presets()
     check_smoothing()
     check_click_animation()
     check_custom_cursor()
+    check_morph()
     check_obs_transform()
     check_ae()
     check_render()

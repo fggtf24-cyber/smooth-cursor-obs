@@ -30,6 +30,8 @@ TILT_STEP_DEG = 1.0  # шаг угла наклона в движении: по�
 TILT_SPEED = 0.6  # ширин кадра в секунду по горизонтали: на этой скорости поворот — 3/4 от полного
 TILT_SMOOTH_MS = 70  # сглаживание угла по времени: поворачивается плавно, без рывков от толчков руки
 TILT_RAMP_MS = 200  # к анимации клика наклон сходит на нет и после неё возвращается за это время, без рывка
+MORPH_STEPS = 16  # шагов анимации смены вида курсора (0 — без смены): отскоку нужны промежуточные размеры
+MORPH_OUT = 0.3  # доля смены вида, за которую прежний курсор сжимается в точку; остальное — рост нового
 
 
 def click_curve(age_ms, duration_ms, press_ms=0):
@@ -64,6 +66,46 @@ def pose_sprite(big, big_hot, rc, lvl, tilt):
     p = lvl / (CLICK_STEPS - 1)
     return press_sprite(big, big_hot, (1 - (1 - rc["click_scale"]) * p) / 4,
                         rc["click_tilt_deg"] * p + tilt * TILT_STEP_DEG)
+
+
+def morph_sprite(old, old_hot, new, new_hot, p, k=0.25):
+    """Смена вида курсора, p 0..1: за первые MORPH_OUT прежний сжимается в точку (к своему центру, с ускорением),
+    затем новый плавно вырастает из точки с одним мягким отскоком — проскакивает на ~12% крупнее и возвращается
+    (затухающая пружина в полтора полупериода, ровно 1 в конце). old/new — спрайты в 1/k размера (по умолчанию 4×, как для анимации клика),
+    результат — в обычном. Точка клика (hotspot) нового — на месте. Возвращает (картинка, hotspot)."""
+    if p < MORPH_OUT:
+        img, hot, scale = old, old_hot, 1 - (p / MORPH_OUT) ** 2
+    else:
+        u = (p - MORPH_OUT) / (1 - MORPH_OUT)
+        img, hot, scale = new, new_hot, 1 - math.exp(-3.5 * u) * math.cos(1.5 * math.pi * u)
+    if scale < 0.08:  # момент между ними: курсор — точка
+        return Image.new("RGBA", (1, 1)), (0, 0)
+    x0, y0, x1, y1 = img.getbbox() or (0, 0, *img.size)
+    c = ((x0 + x1) / 2, (y0 + y1) / 2)
+    im, (cx, cy) = press_sprite(img, c, scale * k, 0)
+    return im, (cx - (c[0] - hot[0]) * k, cy - (c[1] - hot[1]) * k)  # центр — там же, где у несжатого
+
+
+def morph_steps(kind, vis, fps, ms):
+    """Шаг смены вида курсора по кадрам (0 — нет смены) и прежний вид. Смена начинается с первого кадра нового вида
+    и длится ms; сменился снова посреди анимации — новая идёт от вида, что был до неё. После скрытого курсора
+    (печатают текст) — без анимации: появляется сразу нужным."""
+    step, prev = np.zeros(len(kind), int), np.asarray(kind).copy()
+    dur, last, t0, frm = ms * fps / 1000, None, None, None
+    for n in range(len(kind)):
+        if not vis[n]:
+            last = t0 = None
+            continue
+        if last is not None and kind[n] != last:
+            t0, frm = n, last
+        last = kind[n]
+        if t0 is not None:
+            p = (n - t0 + 1) / (dur + 1)
+            if p >= 1:
+                t0 = None
+                continue
+            step[n], prev[n] = min(MORPH_STEPS - 1, max(1, round(p * MORPH_STEPS))), frm
+    return step, prev
 
 
 def tilt_angle(v, right_deg, left_deg, since_click_ms=np.inf):
@@ -230,17 +272,21 @@ def tag(stream, key):
     return "bt709" if v in ("unknown", "reserved") else v
 
 
-def make_sprites(work, types, poses, size, rc, custom=None):
+def make_sprites(work, types, poses, size, rc, custom=None, morphs=()):
     """PNG для каждого слота; возвращает [(слот, файл, hot_x, hot_y)] в порядке наложения (снизу вверх).
-    poses — {(тип, шаг клика, шаг наклона)}, которые есть в видео: спрайты только для них."""
+    poses — {(тип, шаг клика, шаг наклона)}, которые есть в видео: спрайты только для них; morphs — {(прежний тип,
+    новый тип, шаг смены вида)}."""
     big = {}
+
+    def big_of(t):  # поворот и масштаб с 4× запасом и уменьшение — без мыла и лесенки
+        if t not in big:
+            big[t] = wc.cursor_sprite(t, size * 4, custom)
+        return big[t]
 
     def pose(t, lvl, k):
         if not lvl and not k:
             return wc.cursor_sprite(t, size, custom)
-        if t not in big:  # поворот с 4× запасом и уменьшение — без мыла и лесенки
-            big[t] = wc.cursor_sprite(t, size * 4, custom)
-        return pose_sprite(*big[t], rc, lvl, k)
+        return pose_sprite(*big_of(t), rc, lvl, k)
 
     mains = {p: pose(*p) for p in sorted({(t, 0, 0) for t in types} | set(poses))}
     slots = []
@@ -253,6 +299,7 @@ def make_sprites(work, types, poses, size, rc, custom=None):
                 g.putalpha(img.getchannel("A").point(lambda v: round(v * a)))
                 slots.append((f"g{gi}_{t}{tilt_tag(gk)}", g, hot))
     slots += [(f"{t}_{lvl}{tilt_tag(k)}", img, hot) for (t, lvl, k), (img, hot) in mains.items()]
+    slots += [(f"m{m}_{a}_{b}", *morph_sprite(*big_of(a), *big_of(b), m / MORPH_STEPS)) for a, b, m in sorted(morphs)]
     if rc["debug_raw"]:
         img, hot = mains.get(("arrow", 0, 0)) or wc.cursor_sprite("arrow", size)
         a = np.array(img, float)
@@ -270,6 +317,10 @@ def sprite_name(track, n, types, have):
     """Тип курсора в кадре n и его спрайт с учётом шагов анимации клика и наклона (нет такого — обычный курсор)."""
     t = types[track["type"][n]] if track["type"][n] < len(types) else "arrow"
     t = t if f"{t}_0" in have else "arrow"
+    if track["morph"][n]:  # смена вида курсора: шаг важнее клика и наклона
+        m = f"m{track['morph'][n]}_{types[track['prev'][n]]}_{t}"
+        if m in have:
+            return t, m
     main = f"{t}_{track['level'][n]}{tilt_tag(track['tilt'][n])}"
     return t, main if main in have else f"{t}_0"
 
@@ -309,7 +360,7 @@ def write_commands(path, track, info, types, slots, clip, blur=None):
                 # Шлейф только в движении и не во время анимации клика: несжатые «призраки» торчали бы из-под
                 # наклонённого курсора, а в покое утолщали бы его края.
                 for gi, (gx, gy) in enumerate(track["vghosts"]):
-                    if lvl == 0 and abs(gx[n] - x) + abs(gy[n] - y) > 0.5:
+                    if lvl == 0 and not track["morph"][n] and abs(gx[n] - x) + abs(gy[n] - y) > 0.5:
                         want[f"g{n_ghosts - 1 - gi}_{t}{tilt_tag(ghost_tilt(track['tilt'][n]))}"] = (gx[n], gy[n])
             if "raw" in hot and 0 <= track["raw_x"][n] < info["dw"] and 0 <= track["raw_y"][n] < info["dh"]:
                 want["raw"] = (track["raw_vx"][n], track["raw_vy"][n])
@@ -465,6 +516,7 @@ def cursor_track(lg, info, cfg, ghost_ms=()):
     track["tilt_deg"] = np.where(vis, frame_tilt(v, ok, track["level"], fps, rc["motion_tilt_right_deg"],
                                                  rc["motion_tilt_left_deg"], step=None), 0.0)
     track["tilt"] = np.round(track["tilt_deg"] / TILT_STEP_DEG).astype(int)
+    track["morph"], track["prev"] = morph_steps(track["type"], vis, fps, rc["morph_ms"]) if rc["morph_animation"]         else (np.zeros(len(vis), int), track["type"])
     zoom = abs(kx * ky * (a * e - b * d)) ** 0.5  # во сколько раз захват увеличен на видео
     size = max(4, round(wc.cursor_base_size() * disp["dpi"] / 96 * rc["cursor_scale"] * zoom))
     return track, to_video, (cl, ct, cr, cb), size
@@ -505,6 +557,8 @@ def render(video, log_path, cfg, progress=None, clip=None):
     vis, types = track["visible"], lg["types"]
     used = sorted({types[k] for k in np.unique(track["type"][vis])} | {"arrow"}, key=types.index)
     poses = {(types[k], lvl, tl) for k, lvl, tl in zip(*(track[c][vis].tolist() for c in ("type", "level", "tilt")))}
+    mv = vis & (track["morph"] > 0)
+    morphs = {(types[a], types[b], m) for a, b, m in zip(*(track[c][mv].tolist() for c in ("prev", "type", "morph")))}
     if clip:
         out = Path(tempfile.gettempdir()) / f"{video.stem}_preview.mp4"
         try:
@@ -519,7 +573,7 @@ def render(video, log_path, cfg, progress=None, clip=None):
     with tempfile.TemporaryDirectory(prefix="smooth_cursor_") as tmp:
         work = Path(tmp)
         slots = make_sprites(work, used, poses, size, {**rc, "motion_blur": rc["motion_blur"] and not accurate},
-                             lg.get("custom"))
+                             lg.get("custom"), morphs)
         blur = layers = None
         if accurate:  # курсор — один слой, кадры которого считаем здесь и подаём ffmpeg через stdin
             sprites = {name: (np.asarray(Image.open(work / png), np.float32), (hx, hy))

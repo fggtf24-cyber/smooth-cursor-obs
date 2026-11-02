@@ -178,6 +178,11 @@ EN.update({
     "Наклон": "Tilt", "Градусы против часовой вокруг кончика стрелки; минус — по часовой.":
         "Degrees counter-clockwise around the arrow tip; negative is clockwise.",
     "Длительность": "Duration",
+    "Смена курсора": "Cursor change", "Кино + смена курсора": "Cinematic + cursor change",
+    "мс: прежний вид сжимается в точку, новый вырастает из неё с отскоком — стрелка → рука, инструменты Premiere и "
+    "DaVinci.":
+        "ms: the old cursor shrinks to a point, the new one grows out of it with a bounce — arrow → hand, "
+        "Premiere and DaVinci tools.",
     "мс: первая четверть — нажатие, затем плавный возврат. Пока кнопка зажата, наклон держится.":
         "ms: the first quarter presses in, the rest eases back. The tilt holds while the button is down.",
     "Курсор": "Cursor", "Размер": "Size", "Наклон в движении": "Lean in motion", "Вправо": "Right", "Влево": "Left",
