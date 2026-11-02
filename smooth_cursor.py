@@ -5,18 +5,22 @@
     python smooth_cursor.py --rerender FILE --debug
 """
 import argparse
+import base64
 import ctypes as C
 import ctypes.wintypes as W
+import io
 import json
 import logging
 import math
 import re
+import sys
 import threading
 import time
 from pathlib import Path
 
 import numpy as np
 import obsws_python as obs
+from PIL import Image
 
 import win32cursor as wc  # первым: включает DPI awareness
 from i18n import t
@@ -173,12 +177,16 @@ class Obs:
 
     def setup_scene(self, d, fps):
         """Настройка OBS под экран d: холст и выход = разрешение экрана, fps; сцена «Smooth Cursor» с захватом
-        этого экрана без курсора на весь холст; сцена становится текущей."""
+        этого экрана без курсора на весь холст; сцена становится текущей. Метод захвата — «Автоматически» (DXGI): у него
+        задержка кадра ровная (±3 мс), у «Windows 10 (1903 и новее)» — гуляет на ±12 мс, а при 30 fps и от записи к
+        записи на десятки мс. Но если Windows рисует курсор программно (крупный указатель — 4K с масштабом 200%,
+        увеличенный размер в «Специальных возможностях»), при DXGI он попадает в кадр, хотя захват курсора выключен, —
+        тогда метод «Windows 10»: он отдаёт картинку без курсора."""
         w, h = d["width"], d["height"]
         self.req.set_video_settings(int(fps), 1, w, h, w, h)
         if self.SCENE not in [s["sceneName"] for s in self.req.get_scene_list().scenes]:
             self.req.create_scene(self.SCENE)
-        props = {"monitor_id": d["id"], "capture_cursor": False}
+        props = {"monitor_id": d["id"], "capture_cursor": False, "method": 0}  # 0 — авто, 1 — DXGI, 2 — Windows 10
         if self.SOURCE in [i["inputName"] for i in self.req.get_input_list().inputs]:
             self.req.set_input_settings(self.SOURCE, props, True)
         else:
@@ -192,7 +200,55 @@ class Obs:
             "boundsWidth": float(w), "boundsHeight": float(h), "boundsAlignment": 0,
             "cropLeft": 0, "cropTop": 0, "cropRight": 0, "cropBottom": 0})
         self.req.set_current_program_scene(self.SCENE)
+        if sys.getwindowsversion().build >= 18362 and self.cursor_baked(d):  # «Windows 10» — с Windows 10 1903
+            self.req.set_input_settings(self.SOURCE, {"method": 2}, True)
+            log.warning(t("Windows рисует курсор прямо в картинку экрана (крупный указатель или масштаб экрана) — "
+                          "захват экрана переключён на метод «Windows 10 (1903 и новее)», иначе курсор попал бы в видео"))
         log.info(t("OBS настроен: сцена «%s», %s %dx%d @ %d fps"), self.SCENE, d["device"], w, h, fps)
+
+    def cursor_baked(self, d):
+        """Попадает ли курсор в кадр источника, хотя захват курсора выключен. Снимок с курсором в центре экрана и с
+        курсором в стороне: если картинка меняется по форме самого курсора — Windows рисует его в картинку экрана.
+        Курсор на миг сдвигается и возвращается на место."""
+        def shot(x, y):
+            for k in range(10):  # программный перенос может оставить курсор скрытым (скрыт при наборе текста) —
+                wc.user32.SetCursorPos(x + k % 2, y)  # шевелим на пиксель, пока Windows его не покажет
+                time.sleep(0.05)
+                ci.cbSize = C.sizeof(wc.CURSORINFO)
+                if wc.user32.GetCursorInfo(C.byref(ci)) and ci.flags & 1 and not k % 2:
+                    break
+            time.sleep(0.35)  # кадр OBS с новым положением курсора
+            b = self.req.get_source_screenshot(self.SOURCE, "png", d["width"], d["height"], -1).image_data
+            return np.asarray(Image.open(io.BytesIO(base64.b64decode(b.split(",", 1)[1]))).convert("L"), int)
+
+        pt, ci = W.POINT(), wc.CURSORINFO(cbSize=C.sizeof(wc.CURSORINFO))
+        wc.user32.GetCursorPos(C.byref(pt))
+        cx, cy = d["width"] // 2, d["height"] // 2
+        time.sleep(0.5)  # источник только что создан или перенастроен
+        try:
+            a = shot(d["left"] + cx, d["top"] + cy)
+            sprite = None
+            for _ in range(10):  # программа под курсором могла как раз сменить его — снимок старого не выйдет
+                ci.cbSize = C.sizeof(wc.CURSORINFO)
+                if wc.user32.GetCursorInfo(C.byref(ci)) and ci.flags & 1 and (sprite := wc.handle_sprite(ci.hCursor)):
+                    break
+                time.sleep(0.05)
+            b = shot(d["left"] + cx + d["width"] // 4, d["top"] + cy)
+        finally:
+            wc.user32.SetCursorPos(pt.x, pt.y)
+        if not sprite or a.shape != (d["height"], d["width"]) or a.shape != b.shape:
+            log.debug("cursor check: sprite %s, shots %s %s", bool(sprite), a.shape, b.shape)
+            return False
+        img, (hx, hy) = sprite
+        m = np.asarray(img.getchannel("A")) > 128  # где курсор, если он в кадре
+        x0, y0 = cx - round(hx), cy - round(hy)
+        changed = (np.abs(a - b) > 40)[y0:y0 + m.shape[0], x0:x0 + m.shape[1]]
+        if changed.shape != m.shape or not m.any() or m.all():
+            log.debug("cursor check: box %s mask %s any %s all %s", changed.shape, m.shape, m.any(), m.all())
+            return False
+        inside, outside = changed[m].mean(), changed[~m].mean()  # доля изменившихся пикселей под курсором и рядом
+        log.debug("cursor check: inside %.2f outside %.2f", inside, outside)
+        return inside > 0.25 and inside > 3 * outside
 
     def start(self):
         if self.req.get_record_status().output_active:

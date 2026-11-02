@@ -33,6 +33,10 @@ EN = {
         "in the screen corner: whether recording is on, pause and stop; drag it anywhere. It is not in the video.",
     "Windows не умеет прятать значок записи от захвата экрана (нужна Windows 10 2004 или новее)":
         "Windows can't hide the recording badge from screen capture (needs Windows 10 2004 or newer)",
+    "Windows рисует курсор прямо в картинку экрана (крупный указатель или масштаб экрана) — захват экрана переключён "
+    "на метод «Windows 10 (1903 и новее)», иначе курсор попал бы в видео":
+        "Windows draws the cursor into the screen image (large pointer or display scale) — Display Capture switched to "
+        "the “Windows 10 (1903 and up)” method, otherwise the cursor would end up in the video",
     "OBS настроен: сцена «%s», %s %dx%d @ %d fps": "OBS is set up: scene “%s”, %s %dx%d @ %d fps",
     "Не удалось остановить запись в OBS: %s": "Could not stop the recording in OBS: %s",
     "■ Запись остановлена: %s": "■ Recording stopped: %s",
