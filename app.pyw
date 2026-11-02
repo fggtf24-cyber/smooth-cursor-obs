@@ -299,6 +299,7 @@ class LivePreview(tk.Canvas):
         self.tilt_deg = 0.0  # сглаженный угол наклона в движении
         self.drawn = None  # что нарисовано в прошлом кадре — то же самое не перерисовываем
         self.handles = {wc.user32.LoadCursorW(None, cid): n for n, (cid, _) in wc.CURSORS.items()}
+        self.custom = {}  # свои курсоры программ (инструменты Premiere и т. п.): имя → снимок wc.snapshot
         self.sets, self.sig, self.sig_seen, self.sig_t = {}, None, None, 0
         self.pt, self.ci = W.POINT(), wc.CURSORINFO(cbSize=C.sizeof(wc.CURSORINFO))
         self.after(16, self.tick)
@@ -342,10 +343,10 @@ class LivePreview(tk.Canvas):
                 img.putalpha(img.getchannel("A").point(lambda v: round(v * a)))
             elif level or tilt:
                 if (name, "big") not in self.sets:
-                    self.sets[(name, "big")] = wc.cursor_sprite(name, size * 4)
+                    self.sets[(name, "big")] = wc.cursor_sprite(name, size * 4, self.custom)
                 img, hot = render.pose_sprite(*self.sets[(name, "big")], rc, level, tilt)
             else:
-                img, hot = wc.cursor_sprite(name, size)
+                img, hot = wc.cursor_sprite(name, size, self.custom)
             self.sets[key] = (photo(img), hot, img)
         return self.sets[key]
 
@@ -358,7 +359,9 @@ class LivePreview(tk.Canvas):
         u = wc.user32
         with wc.physical():  # окно масштабирует Windows, а курсор и мониторы — в настоящих пикселях
             u.GetCursorPos(C.byref(self.pt))
-            u.GetCursorInfo(C.byref(self.ci))
+            self.ci.cbSize = C.sizeof(wc.CURSORINFO)  # Windows 11 обнуляет cbSize после вызова
+            if not u.GetCursorInfo(C.byref(self.ci)):
+                self.ci.hCursor = None
         mon = next((m for m in self.app.monitors if m["left"] <= self.pt.x < m["left"] + m["width"]
                     and m["top"] <= self.pt.y < m["top"] + m["height"]), None)
         now = time.perf_counter()
@@ -432,7 +435,12 @@ class LivePreview(tk.Canvas):
     def cursor_ops(self, ops, now, mon, s, steps, down, qx, qy, rc):
         """Свечение, «призраки» шлейфа и сам курсор — в список кадра: (x, y, картинка)."""
         ops.append((round(qx + 8 - 36, 1), round(qy + 10 - 36, 1), self.glow))
-        name = self.handles.get(self.ci.hCursor, "arrow")
+        name = self.handles.get(self.ci.hCursor)
+        if name is None:  # не системный курсор — снимаем один раз на хэндл
+            snap = wc.snapshot(self.ci.hCursor, wc.cursor_base_size() * mon["dpi"] / 96)
+            name = self.handles[self.ci.hCursor] = f"custom{len(self.custom)}" if snap else "arrow"
+            if snap:
+                self.custom[name] = snap
         level = 0
         if rc["click_animation"]:
             held = np.inf if down else (self.release_t - self.press_t) * 1000  # пока ЛКМ зажата — наклон держится

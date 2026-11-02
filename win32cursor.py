@@ -196,16 +196,13 @@ class CursorLogger:
     def _capture(self, h, seen):
         """Свой курсор программы (инструменты Premiere и т. п.): картинка в родном размере уходит в лог,
         одинаковые картинки с разными хэндлами — один тип. 0 (стрелка), если снять не вышло."""
-        sp = handle_sprite(h) if h else None
-        if not sp:
+        snap = snapshot(h, self.ref)
+        if not snap:
             return 0
-        img, hot = sp
-        key = img.tobytes() + repr(hot).encode()
+        key = snap["png"] + repr(snap["hot"])
         if key not in seen:
-            buf = io.BytesIO()
-            img.save(buf, "PNG")
             name = f"custom{len(self.custom)}"
-            self.custom[name] = {"png": base64.b64encode(buf.getvalue()).decode(), "hot": hot, "ref": self.ref}
+            self.custom[name] = snap
             self.types.append(name)
             seen[key] = len(self.types) - 1
         return seen[key]
@@ -319,6 +316,17 @@ def cursor_sprite(name, size, custom=None):
     if not shared:
         user32.DestroyCursor(h)
     return out
+
+
+def snapshot(h, ref):
+    """Свой курсор программы по HCURSOR → {png base64 в родном размере, hot, ref} для cursor_sprite; None — не вышло.
+    ref — размер системного курсора на экране в тот момент, px."""
+    sp = handle_sprite(h) if h else None
+    if not sp:
+        return None
+    buf = io.BytesIO()
+    sp[0].save(buf, "PNG")
+    return {"png": base64.b64encode(buf.getvalue()).decode(), "hot": sp[1], "ref": ref}
 
 
 def handle_sprite(h, size=0):
