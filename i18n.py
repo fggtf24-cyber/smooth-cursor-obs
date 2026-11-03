@@ -13,6 +13,8 @@ EN = {
     "Выключил захват курсора в источнике «%s»": "Turned off cursor capture in source “%s”",
     "В источнике «%s» включён захват курсора — на видео будет два курсора":
         "Cursor capture is on in source “%s” — the video will show two cursors",
+    "Курсор попадает в кадр «%s», хотя захват курсора выключен — на видео будет два курсора":
+        "The cursor shows up in “%s” even with cursor capture off — the video will show two cursors",
     "В сцене «%s» нет «Захвата экрана» дисплея %s — считаю, что он растянут на весь холст":
         "Scene “%s” has no Display Capture of %s — assuming it fills the whole canvas",
     "Профиль «%s», сцена «%s»: дисплей %s %dx%d → холст %dx%d @ %.3g fps, захват ×%.2f в (%d, %d)":
