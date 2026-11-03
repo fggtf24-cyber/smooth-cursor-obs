@@ -244,6 +244,10 @@ EN.update({
     "OBS → Сервис → Настройки сервера WebSocket": "OBS → Tools → WebSocket Server Settings",
     "Что записывать": "What to record", "Авто — по сцене OBS": "Auto — from the OBS scene", "АВТО": "AUTO",
     "Выключать захват курсора в источниках сцены": "Turn off cursor capture in scene sources",
+    "Проверять перед записью, что курсора нет в кадре": "Check before recording that the cursor is not in the frame",
+    "Проверка курсора": "Cursor check",
+    "не попал ли курсор в кадр OBS (бывает на 4K); если да — захват на «Windows 10». Раз за запуск.":
+        "whether the cursor got into the OBS frame (happens on 4K); if so, capture goes “Windows 10”. Once per start.",
     "Горячая клавиша": "Hotkey", "ГОРЯЧАЯ КЛАВИША": "HOTKEY", "Старт и стоп": "Start / stop", "Применить": "Apply",
     "Горячая клавиша: %s": "Hotkey: %s", "Непонятная горячая клавиша: {}": "Unrecognized hotkey: {}",
     "Идёт запись — сначала остановите её.": "Recording in progress — stop it first.",

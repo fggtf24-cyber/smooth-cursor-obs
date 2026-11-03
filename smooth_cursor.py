@@ -368,7 +368,7 @@ class Recorder:
 
     def start(self):
         display = self.pick_display()
-        if self.cfg["obs"]["disable_capture_cursor"]:
+        if self.cfg["obs"]["disable_capture_cursor"] and self.cfg["obs"]["check_cursor"]:
             self.obs.check_cursor(display)
         logger = wc.CursorLogger(display, self.cfg["logger"]["hz"])
         logger.start()  # лог пишется с запасом до старта; t0 задаёт событие OBS

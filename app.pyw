@@ -1259,6 +1259,10 @@ class App:
         ov.pack(anchor="w", pady=(6, 0))
         self.hint_on((ov, *ov.winfo_children()), "Значок записи",
                      "в углу экрана: идёт ли запись, пауза и стоп; перетаскивается мышью. На видео его нет.")
+        ck = self.toggle_row(left, t("Проверять перед записью, что курсора нет в кадре"), "obs.check_cursor")
+        ck.pack(anchor="w", pady=(6, 0))
+        self.hint_on((ck, *ck.winfo_children()), "Проверка курсора",
+                     "не попал ли курсор в кадр OBS (бывает на 4K); если да — захват на «Windows 10». Раз за запуск.")
         now = tk.Frame(left, bg=BG)
         now.pack(anchor="w", pady=(22, 0))
         top_now = tk.Frame(now, bg=BG)

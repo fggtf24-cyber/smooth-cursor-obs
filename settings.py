@@ -10,7 +10,7 @@ PATH = Path(os.environ.get("APPDATA", Path.home())) / "SmoothCursor" / "config.y
 LEGACY = Path(__file__).with_name("config.yaml")  # где лежал конфиг раньше — подхватим при первом запуске
 
 DEFAULTS = {
-    "obs": {"host": "localhost", "port": 4455, "password": "", "disable_capture_cursor": True},
+    "obs": {"host": "localhost", "port": 4455, "password": "", "disable_capture_cursor": True, "check_cursor": True},
     "hotkey": "F9",
     "display": "auto",  # auto | 5120x2160 | DISPLAY2 | часть ID монитора
     "logger": {"hz": 240},
