@@ -13,6 +13,7 @@ import winreg
 import numpy as np
 from PIL import Image
 
+from autostart import running_exe  # noqa: F401 — wc.running_exe зовут ae.py и premiere.py
 from i18n import t
 
 user32 = C.WinDLL("user32", use_last_error=True)
@@ -102,8 +103,18 @@ CURSORS = {
 TYPES = list(CURSORS)
 
 
+def virtual_devices():
+    """Имена экранов виртуального адаптера Virtual Display Driver."""
+    out, i, dd = set(), 0, DISPLAY_DEVICEW(cb=C.sizeof(DISPLAY_DEVICEW))
+    while user32.EnumDisplayDevicesW(None, i, C.byref(dd), 0):
+        if dd.DeviceString == "Virtual Display Driver":
+            out.add(dd.DeviceName)
+        i += 1
+    return out
+
+
 def list_monitors():
-    out = []
+    out, virtual = [], virtual_devices()
 
     def cb(hmon, hdc, rect, lparam):
         mi = MONITORINFOEXW(cbSize=C.sizeof(MONITORINFOEXW))
@@ -112,15 +123,35 @@ def list_monitors():
         shcore.GetDpiForMonitor(hmon, 0, C.byref(dpi), C.byref(_))
         dd = DISPLAY_DEVICEW(cb=C.sizeof(DISPLAY_DEVICEW))
         user32.EnumDisplayDevicesW(mi.szDevice, 0, C.byref(dd), 1)  # EDD_GET_DEVICE_INTERFACE_NAME: id как у OBS
-        r = mi.rcMonitor
+        r, a = mi.rcMonitor, mi.rcWork
         out.append({"device": mi.szDevice, "id": dd.DeviceID, "left": r.left, "top": r.top,
-                    "width": r.right - r.left, "height": r.bottom - r.top, "dpi": dpi.value})
+                    "work": [a.left, a.top, a.right, a.bottom],
+                    "width": r.right - r.left, "height": r.bottom - r.top, "dpi": dpi.value,
+                    "virtual": mi.szDevice in virtual})
         return True
 
     proc = C.WINFUNCTYPE(W.BOOL, W.HMONITOR, W.HDC, C.POINTER(W.RECT), W.LPARAM)(cb)
     with physical():
         user32.EnumDisplayMonitors(None, None, proc, 0)
     return out
+
+
+def primary(mons=None):
+    """Основной монитор: у него левый верхний угол в (0, 0)."""
+    mons = mons or list_monitors()
+    return next((m for m in mons if (m["left"], m["top"]) == (0, 0)), mons[0])
+
+
+def corner_pos(mon, w, h):
+    """Левый верх окна w×h в правом нижнем углу рабочей области монитора. Всё от самого экрана: отступы — под его
+    масштаб, панель задач с любой стороны рабочая область уже учла. Если она занимает экран до низа, панель скрывается
+    или снизу лежит док поверх экрана: поднимаем на его высоту."""
+    k = mon["dpi"] / 96
+    gap = round(16 * k)
+    _, _, right, bottom = mon["work"]
+    if bottom >= mon["top"] + mon["height"]:
+        bottom -= round(56 * k)
+    return right - w - gap, bottom - h - gap
 
 
 def find_display(select="auto", obs_ids=()):
@@ -143,6 +174,20 @@ def find_display(select="auto", obs_ids=()):
     found = "\n".join(f"  {m['device']} {m['width']}x{m['height']} @({m['left']},{m['top']}) dpi {m['dpi']} {m['id']}"
                       for m in mons)
     raise LookupError(t("Не могу выбрать дисплей: {}. Мониторы:\n{}").format(why, found))
+
+
+def find_window(part):
+    """Видимое окно, в заголовке которого есть part; иначе None."""
+    hits, buf = [], C.create_unicode_buffer(512)
+
+    def cb(h, _):
+        if user32.IsWindowVisible(h) and user32.GetWindowTextW(h, buf, 512) and part in buf.value:
+            hits.append(h)
+            return False
+        return True
+
+    user32.EnumWindows(C.WINFUNCTYPE(W.BOOL, W.HWND, W.LPARAM)(cb), 0)
+    return hits[0] if hits else None
 
 
 class CursorLogger:
@@ -234,21 +279,6 @@ class CursorLogger:
                 clicks.append([m[0], b, d, x, y])
         return {"version": 1, "display": self.display, "hz": round(1e9 / self.period), "types": self.types,
                 "custom": self.custom, "samples": samples, "clicks": clicks}
-
-
-def running_exe(name):
-    """Полный путь запущенной программы с таким именем exe (без учёта регистра), иначе None."""
-    ids, got = (W.DWORD * 4096)(), W.DWORD()
-    C.windll.psapi.EnumProcesses(ids, C.sizeof(ids), C.byref(got))
-    for pid in ids[:got.value // 4]:
-        h = C.windll.kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
-        if h:
-            buf, n = C.create_unicode_buffer(1024), W.DWORD(1024)
-            ok = C.windll.kernel32.QueryFullProcessImageNameW(h, 0, buf, C.byref(n))
-            C.windll.kernel32.CloseHandle(h)
-            if ok and buf.value.lower().endswith("\\" + name.lower()):
-                return buf.value
-    return None
 
 
 def cursor_base_size():

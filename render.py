@@ -367,6 +367,7 @@ def write_commands(path, track, info, types, slots, clip, blur=None):
     n_ghosts = len(track["vghosts"])
     state = {name: None for name in hot}
     pos = lambda k: blur.get(k, (HIDE, 0))
+    empty = True
     with open(path, "w", encoding="ascii") as f:
         for n in range(len(track["x"])):
             if not t0 - 1 / fps <= n / fps <= t1 + 1 / fps:
@@ -406,6 +407,9 @@ def write_commands(path, track, info, types, slots, clip, blur=None):
                 # и при выпавших кадрах, а sendcmd не будет перебирать старые интервалы.
                 ts = max(0.0, (n - 0.5) / fps - t0)
                 f.write(f"{ts:.6f}-{ts + 1:.6f} {', '.join(cmds)};\n")
+                empty = False
+        if empty:  # курсор всю запись на другом мониторе, а пустой список sendcmd считает ошибкой
+            f.write(f"0.000000-1.000000 overlay@{next(iter(hot))} x {HIDE};\n")
 
 
 BLUR_CAP, BLUR_SAMPLES = 512, 256  # точный motion blur: слой не больше 512 px, до 256 выборок за выдержку
@@ -542,6 +546,27 @@ def cursor_track(lg, info, cfg, ghost_ms=()):
     zoom = abs(kx * ky * (a * e - b * d)) ** 0.5  # во сколько раз захват увеличен на видео
     size = max(4, round(wc.cursor_base_size() * disp["dpi"] / 96 * rc["cursor_scale"] * zoom))
     return track, to_video, (cl, ct, cr, cb), size
+
+
+def eta_left(start_pct, pct, elapsed):
+    """Сколько секунд осталось при той же скорости; None — ещё рано судить."""
+    if pct - start_pct < 1 or elapsed < 1:
+        return None
+    return elapsed / (pct - start_pct) * max(100 - pct, 0)
+
+
+def eta_text(seconds):
+    """Примерное время: чем дальше конец, тем грубее — иначе цифры прыгают."""
+    if seconds is None:
+        return t("считаю время…")
+    if seconds < 5:
+        return t("почти готово")
+    if seconds < 60:
+        return t("осталось ≈ {} с").format(max(5, round(seconds / 5) * 5))
+    if seconds < 600:
+        m, s = divmod(round(seconds / 10) * 10, 60)
+        return t("осталось ≈ {} мин {} с").format(m, s) if s else t("осталось ≈ {} мин").format(m)
+    return t("осталось ≈ {} мин").format(round(seconds / 60))
 
 
 def render(video, log_path, cfg, progress=None, clip=None):

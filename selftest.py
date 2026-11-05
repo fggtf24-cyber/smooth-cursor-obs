@@ -176,6 +176,28 @@ def check_render():
         assert (tmp / "src_cursor.csv").read_text(encoding="utf-8").count("\n") == src["frames"] + 1
 
 
+def check_cursor_elsewhere():
+    """Всю запись курсор на другом мониторе: видео всё равно получается, просто без курсора."""
+    cfg = settings.load()
+    cfg["sync"]["offset_ms"] = 0
+    ff = render.tool(cfg["render"]["ffmpeg"], "ffmpeg")
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        video = tmp / "src.mp4"
+        subprocess.run([ff, "-v", "error", "-f", "lavfi", "-i", "color=c=gray:s=640x360:r=30:d=1", "-c:v", "libx264",
+                        str(video)], check=True)
+        log = synth_log()
+        log["display"].update(width=640, height=360)
+        log["samples"] = [[s[0], 300, 1500, s[3], s[4]] for s in log["samples"]]
+        log["clicks"] = []
+        (tmp / "src.cursor.json").write_text(json.dumps(log))
+        for accurate, blur in ((True, True), (False, True), (False, False)):
+            cfg["render"].update(blur_accurate=accurate, motion_blur=blur, debug_raw=False, codec="libx264")
+            out = render.render(video, tmp / "src.cursor.json", cfg, progress=lambda pct: False)
+            assert render.probe(render.tool(cfg["render"]["ffmpeg"], "ffprobe"), out)["frames"] == 30, (accurate, blur)
+    print("курсор на другом мониторе: ок")
+
+
 def check_accurate_blur():
     """Точный motion blur. В покое (клик, смена курсора) — пиксель в пиксель как обычный режим: значит, слой и его
     позиция попадают в свой кадр. В движении — смаз сплошной и несёт столько же света, сколько неподвижный курсор.
@@ -378,7 +400,176 @@ def check_morph():
     print("смена вида курсора: ок")
 
 
+def check_autostart():
+    """Фоновый процесс запускает программу только в момент, когда OBS открылся, и выходит по сигналу."""
+    import threading
+    import time
+    from unittest import mock
+
+    import autostart
+    obs_up, runs = [], []
+    with mock.patch.object(autostart, "obs_running", lambda: obs_up[0] if obs_up else set()), \
+            mock.patch.object(autostart.subprocess, "Popen", lambda c: runs.append(c)), \
+            mock.patch.object(autostart, "STOP", "Local\\SmoothCursorSelftest"):
+        th = threading.Thread(target=autostart.watch, args=(5,))
+        th.start()
+        for up in (set(), {1}, {1}, set(), {2}, {2, 3}):  # {2, 3}: старый висит, рядом открыли новый
+            obs_up[:] = [up]
+            time.sleep(0.05)
+        autostart.watch(5)  # второй фоновый процесс сразу выходит, не мешая первому
+        assert th.is_alive(), "второй процесс сбил первый"
+        autostart.signal(autostart.STOP)
+        th.join(2)
+        assert not th.is_alive(), "не вышел по сигналу"
+    assert len(runs) == 3 and all("--with-obs" in c for c in runs), runs
+    print("запуск с OBS: ок")
+
+
+def check_obs_buttons():
+    """Кнопки записи в самом OBS: программа узнаёт о них; свои старт и стоп за чужие не принимает."""
+    from types import SimpleNamespace as NS
+    from unittest import mock
+
+    import smooth_cursor as sc
+    calls, handlers = [], {}
+
+    class Req:
+        def __init__(self, **kw):
+            pass
+
+        def get_record_status(self):
+            return NS(output_active=False)
+
+        def start_record(self):
+            handlers["on_record_state_changed"](NS(output_state="OBS_WEBSOCKET_OUTPUT_STARTED"))
+
+        def stop_record(self):
+            calls.append("stop_record")
+            fire("STOPPED", output_path="own.mkv")
+            return NS(output_path="own.mkv")
+
+    class Ev:
+        def __init__(self, **kw):
+            self.callback = NS(register=lambda fs: handlers.update({f.__name__: f for f in fs}))
+
+    def fire(state, **kw):
+        handlers["on_record_state_changed"](NS(output_state="OBS_WEBSOCKET_OUTPUT_" + state, **kw))
+
+    with mock.patch.object(sc.obs, "ReqClient", Req), mock.patch.object(sc.obs, "EventClient", Ev):
+        o = sc.Obs({"host": "", "port": 0, "password": ""})
+    seen = []
+    o.external = seen.append
+    o.start()
+    assert o.stop() == Path("own.mkv") and calls == ["stop_record"] and not seen, ("своя запись — чужая", seen)
+    calls.clear()
+    fire("STARTED", output_path="obs.mkv")
+    fire("PAUSED")
+    assert seen == ["started"] and o.t_started and o.elapsed()[1], "старт из OBS не замечен"
+    fire("STOPPED", output_path="obs.mkv")
+    assert seen == ["started", "stopped"] and o.stop() == Path("obs.mkv") and not calls, \
+        ("остановленную в OBS запись не останавливаем второй раз", calls)
+    calls.clear()
+
+    class NotReady(Req):  # загружающийся OBS: подключился, но на запросы отказ — соединения надо закрыть
+        def get_version(self):
+            raise RuntimeError("207")
+
+        def disconnect(self):
+            calls.append("req closed")
+
+    class Ev2(Ev):
+        def disconnect(self):
+            calls.append("ev closed")
+
+    with mock.patch.object(sc.obs, "ReqClient", NotReady), mock.patch.object(sc.obs, "EventClient", Ev2):
+        try:
+            sc.Recorder({"obs": {"host": "", "port": 0, "password": ""}})
+            raise AssertionError("отказ OBS проглочен")
+        except RuntimeError:
+            pass
+    assert calls == ["ev closed", "req closed"], ("соединения остались открытыми — OBS не завершится", calls)
+    print("кнопки записи в OBS: ок")
+
+
+def check_render_toast():
+    """Плашка рендера: примерное время и угол экрана при разных экранах, масштабах и панели задач."""
+    assert render.eta_left(0, 0.5, 5) is None and render.eta_left(10, 60, 0.5) is None, "рано судить"
+    assert abs(render.eta_left(10, 60, 50) - 40) < 1e-6 and render.eta_left(10, 100, 50) == 0
+    assert [render.eta_text(s) for s in (None, 3, 42, 60, 83, 700)] == [
+        "считаю время…", "почти готово", "осталось ≈ 40 с", "осталось ≈ 1 мин", "осталось ≈ 1 мин 20 с",
+        "осталось ≈ 12 мин"], [render.eta_text(s) for s in (None, 3, 42, 60, 83, 700)]
+
+    def mon(w, h, dpi, work=None, left=0, top=0):
+        return {"left": left, "top": top, "width": w, "height": h, "dpi": dpi,
+                "work": work or [left, top, left + w, top + h - 40 * dpi // 96]}
+
+    for m in (mon(1366, 768, 96), mon(1920, 1080, 120), mon(2560, 1440, 96), mon(3840, 2160, 192),
+              mon(5120, 1440, 96), mon(1280, 720, 144), mon(1080, 1920, 96),
+              mon(1920, 1080, 96, [60, 0, 1920, 1080]), mon(1920, 1080, 96, [0, 40, 1920, 1080]),
+              mon(1920, 1080, 96, [0, 0, 1860, 1080])):
+        k = m["dpi"] / 96
+        w, h = round(340 * k), round(78 * k)
+        x, y = wc.corner_pos(m, w, h)
+        a, b, c, d = m["work"]
+        assert a <= x and b <= y and x + w <= c and y + h <= d, ("плашка вышла за экран", m, x, y)
+        assert c - (x + w) == round(16 * k), ("отступ справа не от края", m, x)
+        assert d - (y + h) >= round(16 * k), ("отступ снизу", m, y)
+    full = mon(1920, 1080, 96, [0, 0, 1920, 1080])
+    assert 1080 - (wc.corner_pos(full, 340, 78)[1] + 78) >= 56, "док поверх экрана закрыл бы плашку"
+    print("плашка рендера: ок")
+
+
+def check_virtual_mode():
+    """DEVMODEW собран по разметке Windows: поля на своих смещениях."""
+    import struct
+    from unittest import mock
+
+    import vdisplay
+
+    class DEVMODEW(wc.C.Structure):  # начало структуры — как в wingdi.h
+        _fields_ = [("name", wc.C.c_wchar * 32), ("spec", wc.C.c_ushort), ("drv", wc.C.c_ushort),
+                    ("size", wc.C.c_ushort), ("extra", wc.C.c_ushort), ("fields", wc.C.c_uint), ("u", wc.C.c_byte * 16),
+                    ("color", wc.C.c_short * 5), ("form", wc.C.c_wchar * 32), ("logpix", wc.C.c_ushort),
+                    ("bpp", wc.C.c_uint), ("w", wc.C.c_uint), ("h", wc.C.c_uint), ("flags", wc.C.c_uint),
+                    ("hz", wc.C.c_uint), ("icm", wc.C.c_uint * 8)]
+    got = []
+
+    def change(name, dm, *rest):
+        if dm is not None:  # None — применить отложенное
+            got.append(DEVMODEW.from_buffer_copy(bytes(dm)))
+        return 0
+
+    def enum(name, i, dm):
+        if i >= 2:
+            return 0
+        d = DEVMODEW.from_buffer(dm)
+        d.w, d.h, d.hz = (1920, 1080, 60) if i == 0 else (5120, 2160, 144)
+        return 1
+
+    with mock.patch.object(wc, "user32", mock.Mock(ChangeDisplaySettingsExW=change, EnumDisplaySettingsW=enum)):
+        assert vdisplay.set_mode("x", 2560, 1440, 120) and vdisplay.place("x", 1920, 1080, 3520)
+        assert vdisplay.modes("x") == {(1920, 1080, 60), (5120, 2160, 144)}, vdisplay.modes("x")
+    assert wc.C.sizeof(DEVMODEW) == 220, wc.C.sizeof(DEVMODEW)
+    assert (got[0].size, got[0].w, got[0].h, got[0].hz) == (220, 2560, 1440, 120) and got[0].fields == 0x580000, got[0]
+    assert got[1].fields == 0x180020 and struct.unpack("<ii", bytes(got[1].u)[:8]) == (3520, 0), "позиция экрана"
+    for text, want in (("5120x2160", "5120x2160"), (" 5120 х 2160 ", "5120x2160"), ("5120×2160", "5120x2160"),
+                       ("5120 на 2160", "5120x2160"), ("1367*769", "1366x768")):
+        assert vdisplay.parse_size(text) == want, text
+    for text in ("", "5120", "abc", "100x100", "9000x2160", "1920x1080x60"):
+        try:
+            vdisplay.parse_size(text)
+        except ValueError:
+            continue
+        raise AssertionError(("приняли плохое разрешение", text))
+    print("режим монитора: ок")
+
+
 if __name__ == "__main__":
+    check_autostart()
+    check_obs_buttons()
+    check_virtual_mode()
+    check_render_toast()
+    check_cursor_elsewhere()
     check_presets()
     check_smoothing()
     check_click_animation()

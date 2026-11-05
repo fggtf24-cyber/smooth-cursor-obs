@@ -10,7 +10,8 @@ PATH = Path(os.environ.get("APPDATA", Path.home())) / "SmoothCursor" / "config.y
 LEGACY = Path(__file__).with_name("config.yaml")  # где лежал конфиг раньше — подхватим при первом запуске
 
 DEFAULTS = {
-    "obs": {"host": "localhost", "port": 4455, "password": "", "disable_capture_cursor": True, "check_cursor": True},
+    "obs": {"host": "localhost", "port": 4455, "password": "", "disable_capture_cursor": True, "check_cursor": True,
+            "cursor_ok": []},  # cursor_ok — захваты, где проверка уже прошла: на этих экране и настройках курсора нет в кадре
     "hotkey": "F9",
     "display": "auto",  # auto | 5120x2160 | DISPLAY2 | часть ID монитора
     "logger": {"hz": 240},
@@ -47,10 +48,12 @@ DEFAULTS = {
         "export_keyframes": False,
     },
     "ui": {"folder": "", "auto_render": True, "rec_overlay": True, "overlay_pos": None, "preview_start": 0.0,
-           "preview_len": 5.0, "lang": "ru",
+           "preview_len": 5.0, "lang": "ru", "with_obs": True, "tray": False,
            "onboarded": False, "skip_version": "", "ae_intro": False, "premiere_plugin": ""},
     # folder — папка записей OBS; skip_version — «не сейчас»; ae_intro — окно про After Effects уже показано;
-    # premiere_plugin — какая версия плагина для Premiere поставлена
+    # premiere_plugin — какая версия плагина для Premiere поставлена; with_obs — запускаться вместе с OBS;
+    # tray — с OBS запускаться без окна, а крестик сворачивает в трей
+    "virtual": {"on": False, "size": "1920x1080", "hz": 60, "prev": None},  # виртуальный монитор; prev — что вернуть в OBS
     "my_presets": [],  # свои пресеты: [{"name": ..., значения PRESET_KEYS}], сохраняются из меню пресетов
 }
 

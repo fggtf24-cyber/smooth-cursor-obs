@@ -167,7 +167,7 @@ EN.update({
     "Обновление пропущено. Скачать можно здесь: %s": "Update skipped. You can download it here: %s",
     "Скачиваю обновление %s…": "Downloading update %s…",
     "Не удалось обновиться: %s": "Update failed: %s",
-    "файл обновления повреждён (не совпала контрольная сумма)": "the update file is corrupted (checksum mismatch)",
+    "файл скачался с ошибкой (не совпала контрольная сумма)": "the download is corrupted (checksum mismatch)",
     "Пресет": "Preset", "Стандарт": "Standard", "Лёгкий": "Light", "Кино": "Cinematic", "Без эффектов": "No effects",
     "С наклоном": "Lean", "Наклон v2": "Lean v2", "Мой": "Mine", "СВОИ ПРЕСЕТЫ": "YOUR PRESETS", "удалить?": "delete?",
     "Сохранить": "Save",
@@ -246,7 +246,7 @@ EN.update({
     "Выключать захват курсора в источниках сцены": "Turn off cursor capture in scene sources",
     "Проверять перед записью, что курсора нет в кадре": "Check before recording that the cursor is not in the frame",
     "Проверка курсора": "Cursor check",
-    "не попал ли курсор в кадр OBS (бывает на 4K); если да — захват на «Windows 10». Раз за запуск.":
+    "не попал ли курсор в кадр OBS (бывает на 4K); если да — захват на «Windows 10». Один раз на экран.":
         "whether the cursor got into the OBS frame (happens on 4K); if so, capture goes “Windows 10”. Once per start.",
     "Горячая клавиша": "Hotkey", "ГОРЯЧАЯ КЛАВИША": "HOTKEY", "Старт и стоп": "Start / stop", "Применить": "Apply",
     "Горячая клавиша: %s": "Hotkey: %s", "Непонятная горячая клавиша: {}": "Unrecognized hotkey: {}",
@@ -304,4 +304,71 @@ EN.update({
         "\n\nInstall it? The video goes into the open sequence at the playhead, or right after it where there is "
         "room if that spot is taken (V1 and A1).",
     "Плагин для Premiere не поставился: %s": "Premiere plugin was not installed: %s",
+    # --- запуск с OBS, трей ---
+    "Запуск": "Startup",
+    "Запускать вместе с OBS": "Start together with OBS",
+    "Работать в трее: с OBS — без окна, крестик сворачивает": "Live in the tray: no window with OBS, X minimizes",
+    "Не удалось настроить запуск вместе с OBS: %s": "Could not set up starting with OBS: %s",
+    "Открыть Smooth Cursor": "Open Smooth Cursor",
+    "Остановить запись": "Stop recording",
+    "Выход": "Exit",
+    "OBS открыт, но не подключается. Включён ли WebSocket?": "OBS is open but won't connect. Is WebSocket enabled?",
+    "● Запись идёт (начата в OBS)": "● Recording (started in OBS)",
+    # --- виртуальный монитор ---
+    "Виртуальный монитор": "Virtual monitor",
+    "Виртуальный монитор: %s": "Virtual monitor: %s",
+    "Включить": "Turn on",
+    "Выключить": "Turn off",
+    "Показать экран": "Show screen",
+    "Разрешение": "Resolution",
+    "Включён: {} · {}×{}. Уведите курсор за край экрана — окно OBS покажет, что там.":
+        "On: {} · {}×{}. Move the cursor past the screen edge — the OBS window shows what is there.",
+    "Монитора нет в Windows — выключите и включите снова.": "Windows has no such monitor — turn it off and on again.",
+    "Отдельный экран только для записи: ваш монитор остаётся свободным. Включите — драйвер, OBS и окно с этим экраном "
+    "настроятся сами.":
+        "A separate screen just for recording: your monitor stays free. Turn it on — the driver, OBS and a window "
+        "showing this screen set themselves up.",
+    "Откройте OBS — окно с экраном появится само.": "Open OBS — the window with the screen appears by itself.",
+    "OBS не открыл окно проектора": "OBS did not open the projector window",
+    "Скачиваю драйвер…": "Downloading the driver…",
+    "Ставлю драйвер — подтвердите запрос Windows…": "Installing the driver — confirm the Windows prompt…",
+    "Включаю драйвер — подтвердите запрос Windows…": "Enabling the driver — confirm the Windows prompt…",
+    "Запускаю драйвер…": "Starting the driver…",
+    "Включаю монитор…": "Turning the monitor on…",
+    "Windows не ответила за 5 минут": "Windows did not respond within 5 minutes",
+    "Windows не дала прав администратора — запрос отклонён": "Windows gave no administrator rights — the prompt was declined",
+    "драйвер не запустился — возможно, нужно перезагрузить компьютер":
+        "the driver did not start — the computer may need a restart",
+    "монитор не появился": "the monitor did not appear",
+    "монитор не выключился": "the monitor did not turn off",
+    "Частота, Гц": "Refresh rate, Hz",
+    "считаю время…": "estimating…",
+    "почти готово": "almost done",
+    "осталось ≈ {} с": "≈ {} s left",
+    "осталось ≈ {} мин {} с": "≈ {} min {} s left",
+    "осталось ≈ {} мин": "≈ {} min left",
+    " · ещё {}": " · {} more",
+    "открыть видео ›": "open video ›",
+    "подробности в журнале": "details in the log",
+    "Как\nработать.": "How to\nwork.",
+    "В трее — запись кнопкой в OBS": "In the tray — record with the button in OBS",
+    "Программа сама запускается вместе с OBS и ждёт у часов. Нажимаете «Начать запись» в OBS — она подхватит запись и "
+    "покажет значок с паузой и стопом.":
+        "The app starts with OBS and waits by the clock. Press Start Recording in OBS — it picks the recording up and "
+        "shows a badge with pause and stop.",
+    "Обычное окно — запись кнопкой здесь": "Regular window — record with the button here",
+    "Открываете Smooth Cursor сами, когда нужно, и нажимаете «Начать запись» в нём или горячую клавишу.":
+        "Open Smooth Cursor yourself when needed and press Start recording in it, or the hotkey.",
+    "Поменять можно потом: вкладка OBS → «Запуск».": "You can change this later: OBS tab → Startup.",
+    "Откройте OBS и нажмите в нём «Начать запись» — программа запустится сама. Когда остановите, рядом с записью "
+    "появится видео с плавным курсором. Значок программы — у часов.":
+        "Open OBS and press Start Recording there — the app starts by itself. When you stop, a video with the smooth "
+        "cursor appears next to the recording. The app's icon is by the clock.",
+    "Напишите ширину и высоту, например 5120x2160": "Type width and height, for example 5120x2160",
+    "Разрешение — от {}×{} до {}×{}": "Resolution must be from {}×{} to {}×{}",
+    "Добавляю разрешение — подтвердите запрос Windows…": "Adding the resolution — confirm the Windows prompt…",
+    "драйвер не принял разрешение {} {} Гц": "the driver did not accept {} at {} Hz",
+    "Windows не приняла разрешение {} {} Гц": "Windows did not accept {} at {} Hz",
+    "Идёт запись — разрешение сменится при следующем включении монитора.":
+        "Recording — the resolution changes the next time the monitor is turned on.",
 })

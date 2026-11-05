@@ -94,11 +94,17 @@ class Obs:
     def __init__(self, c):
         kw = dict(host=c["host"], port=c["port"], password=c["password"], timeout=5)
         self.req = obs.ReqClient(**kw)
-        self.ev = obs.EventClient(**kw)
+        try:
+            self.ev = obs.EventClient(**kw)
+        except Exception:
+            self.req.disconnect()  # незакрытое соединение не даёт OBS завершиться
+            raise
         self.started, self.stopped = threading.Event(), threading.Event()
         self.t_started, self.out_path = 0, None
         self.pauses, self.files = [], []  # паузы [начало, конец]; файлы записи [(с какого момента, путь)]
-        self.cursor_ok = set()  # захваты, где курсор в кадр не попадает (проверено при этих экране и настройках)
+        self.cursor_ok = c.setdefault("cursor_ok", [])  # где курсор в кадр не попадает: живёт в настройках
+        self.own = self.stopping = False  # запись начала и останавливает программа; иначе — кнопка в самом OBS
+        self.external = lambda kind: None  # «started» / «stopped»: кнопка записи нажата в самом OBS
 
         def on_record_state_changed(d):
             stamp = time.perf_counter_ns()  # штамп первым делом: от него отсчитывается t0 лога
@@ -107,6 +113,10 @@ class Obs:
                 self.t_started = stamp
                 self.files = [(stamp, getattr(d, "output_path", None))]
                 self.started.set()
+                if not self.own:
+                    self.stopped.clear()
+                    self.out_path, self.pauses = None, []
+                    self.external("started")
             elif s == "OBS_WEBSOCKET_OUTPUT_PAUSED":
                 self.pauses.append([stamp, None])
             elif s == "OBS_WEBSOCKET_OUTPUT_RESUMED" and self.pauses:
@@ -114,6 +124,8 @@ class Obs:
             elif s == "OBS_WEBSOCKET_OUTPUT_STOPPED":
                 self.out_path = d.output_path
                 self.stopped.set()
+                if not self.stopping:
+                    self.external("stopped")
 
         def on_record_file_changed(d):  # OBS разбивает запись на файлы (websocket 5.5+): дальше пишет в новый
             self.files.append((time.perf_counter_ns(), d.new_output_path))
@@ -176,8 +188,11 @@ class Obs:
                 yield it["sourceName"], it["inputKind"], on, mi, it["sceneItemTransform"]
 
     SCENE, SOURCE = "Smooth Cursor", "Smooth Cursor · Display"
+    VSCENE, VSOURCE = "Smooth Cursor · Virtual", "Smooth Cursor · Virtual Display"
+    # Проектору — свой захват: у записи курсор выключен, и в окне его было бы не видно
+    PSCENE, PSOURCE = "Smooth Cursor · Projector", "Smooth Cursor · Virtual Monitor"
 
-    def setup_scene(self, d, fps):
+    def setup_scene(self, d, fps, scene=SCENE, source=SOURCE):
         """Настройка OBS под экран d: холст и выход = разрешение экрана, fps; сцена «Smooth Cursor» с захватом
         этого экрана без курсора на весь холст; сцена становится текущей. Метод захвата — «Автоматически» (DXGI): у него
         задержка кадра ровная (±3 мс), у «Windows 10 (1903 и новее)» — гуляет на ±12 мс, а при 30 fps и от записи к
@@ -185,35 +200,97 @@ class Obs:
         увеличенный размер в «Специальных возможностях»), при DXGI он попадает в кадр, хотя захват курсора выключен, —
         тогда метод «Windows 10»: он отдаёт картинку без курсора."""
         w, h = d["width"], d["height"]
-        self.req.set_video_settings(int(fps), 1, w, h, w, h)
-        if self.SCENE not in [s["sceneName"] for s in self.req.get_scene_list().scenes]:
-            self.req.create_scene(self.SCENE)
-        props = {"monitor_id": d["id"], "capture_cursor": False, "method": 0}  # 0 — авто, 1 — DXGI, 2 — Windows 10
-        if self.SOURCE in [i["inputName"] for i in self.req.get_input_list().inputs]:
-            self.req.set_input_settings(self.SOURCE, props, True)
-        else:
-            self.req.create_input(self.SCENE, self.SOURCE, "monitor_capture", props, True)
+        self.set_video(int(fps), 1, w, h, w, h)
+        self._ensure_capture(scene, source, {"monitor_id": d["id"], "capture_cursor": False, "method": 0})
         try:
-            item = self.req.get_scene_item_id(self.SCENE, self.SOURCE).scene_item_id
+            item = self.req.get_scene_item_id(scene, source).scene_item_id
         except Exception:
-            item = self.req.create_scene_item(self.SCENE, self.SOURCE, True).scene_item_id
-        self.req.set_scene_item_transform(self.SCENE, item, {
+            item = self.req.create_scene_item(scene, source, True).scene_item_id
+        self.req.set_scene_item_transform(scene, item, {
             "positionX": 0.0, "positionY": 0.0, "rotation": 0.0, "alignment": 5, "boundsType": "OBS_BOUNDS_STRETCH",
             "boundsWidth": float(w), "boundsHeight": float(h), "boundsAlignment": 0,
             "cropLeft": 0, "cropTop": 0, "cropRight": 0, "cropBottom": 0})
-        self.req.set_current_program_scene(self.SCENE)
-        self.check_cursor(dict(d, source=self.SOURCE, method=0))
-        log.info(t("OBS настроен: сцена «%s», %s %dx%d @ %d fps"), self.SCENE, d["device"], w, h, fps)
+        self.req.set_current_program_scene(scene)
+        self.check_cursor(dict(d, source=source, method=0))
+        log.info(t("OBS настроен: сцена «%s», %s %dx%d @ %d fps"), scene, d["device"], w, h, fps)
+
+    def set_video(self, fps_num, fps_den, base_w, base_h, out_w, out_h):
+        """Частота, холст и выход. SetVideoSettings размеры больше 4096 не принимает, а OBS с ними работает: они идут
+        в настройки профиля, запрос только применяет их."""
+        for name, value in (("BaseCX", base_w), ("BaseCY", base_h), ("OutputCX", out_w), ("OutputCY", out_h)):
+            self.req.set_profile_parameter("Video", name, str(value))
+        self.req.send("SetVideoSettings", {"fpsNumerator": fps_num, "fpsDenominator": fps_den})
+
+    def _ensure_capture(self, scene, source, props):
+        """Сцена и захват экрана в ней. method в props: 0 — авто, 1 — DXGI, 2 — Windows 10."""
+        if scene not in [s["sceneName"] for s in self.req.get_scene_list().scenes]:
+            self.req.create_scene(scene)
+        if source in [i["inputName"] for i in self.req.get_input_list().inputs]:
+            self.req.set_input_settings(source, props, True)
+        else:
+            self.req.create_input(scene, source, "monitor_capture", props, True)
+
+    def video_state(self):
+        """Текущие сцена и видео OBS — чтобы вернуть их, когда виртуальный монитор выключат."""
+        v = self.req.get_video_settings()
+        return {"scene": self.req.get_current_program_scene().scene_name,
+                "video": [v.fps_numerator, v.fps_denominator, v.base_width, v.base_height, v.output_width,
+                          v.output_height]}
+
+    def show_virtual(self, d):
+        """Запись виртуального монитора d: своя сцена на его разрешении и окно-проектор на настоящем мониторе."""
+        v = self.req.get_video_settings()
+        ready = self.VSOURCE in [i["inputName"] for i in self.req.get_input_list().inputs] and \
+            self.req.get_input_settings(self.VSOURCE).input_settings.get("monitor_id") == d["id"] and \
+            (v.base_width, v.base_height) == (d["width"], d["height"])
+        if ready:  # настроено раньше: метод захвата, выбранный проверкой курсора, не сбрасываем
+            self.req.set_current_program_scene(self.VSCENE)
+        else:
+            self.setup_scene(d, round(v.fps_numerator / v.fps_denominator), self.VSCENE, self.VSOURCE)
+        self.show_projector(d)
+
+    def show_projector(self, d):
+        """Окно OBS с виртуальным монитором: уже открыто — на передний план, иначе — на половину основного монитора."""
+        self._ensure_capture(self.PSCENE, self.PSOURCE, {"monitor_id": d["id"], "capture_cursor": True, "method": 0})
+        u, hwnd = wc.user32, wc.find_window(self.PSOURCE)
+        if hwnd:
+            u.ShowWindow(W.HWND(hwnd), 9)  # SW_RESTORE
+            u.SetForegroundWindow(W.HWND(hwnd))
+            return
+        self.req.open_source_projector(self.PSOURCE)
+        for _ in range(30):
+            if hwnd := wc.find_window(self.PSOURCE):
+                m = wc.primary()
+                w = m["width"] // 2
+                h = w * d["height"] // d["width"]
+                u.SetWindowPos(W.HWND(hwnd), None, m["left"] + (m["width"] - w) // 2, m["top"] + (m["height"] - h) // 2,
+                               w, h, 0x4 | 0x10)  # SWP_NOZORDER | SWP_NOACTIVATE
+                return
+            time.sleep(0.1)
+        log.warning(t("OBS не открыл окно проектора"))
+
+    def restore(self, prev):
+        """Вернуть OBS к тому, что было до виртуального монитора, и закрыть проектор."""
+        if hwnd := wc.find_window(self.PSOURCE):
+            wc.user32.PostMessageW(W.HWND(hwnd), 0x10, 0, 0)  # WM_CLOSE
+        self.set_video(*prev["video"])
+        if prev["scene"] in [s["sceneName"] for s in self.req.get_scene_list().scenes]:
+            self.req.set_current_program_scene(prev["scene"])
 
     def check_cursor(self, d):
         """Перед записью и при настройке: не попадает ли курсор в кадр захвата экрана d["source"], хотя захват курсора
         выключен. Если попадает — метод захвата «Windows 10 (1903 и новее)», он отдаёт картинку без курсора. Проверка
-        двигает курсор, поэтому делается раз на захват при этих экране, масштабе и размере курсора."""
-        key = (d.get("source"), d["id"], d.get("method"), d["width"], d["height"], d["dpi"], wc.cursor_base_size())
+        двигает курсор, поэтому делается раз на захват при этих экране, масштабе и размере курсора: результат хранится
+        в настройках."""
+        key = "|".join(map(str, (d.get("source"), d["id"], d.get("method"), d["width"], d["height"], d["dpi"],
+                                 wc.cursor_base_size())))
         if not d.get("source") or d.get("method") == 2 or key in self.cursor_ok:
             return
-        if not self.cursor_baked(d):
-            self.cursor_ok.add(key)
+        # Снимок кадра больше 4096 OBS не отдаёт, а такой же в полном размере не успевает прийти: проверить нечем,
+        # а без него на этих экранах (крупные, с большим масштабом) курсор как раз рисуется в картинку
+        big = max(d["width"], d["height"]) > 4096
+        if not big and not self.cursor_baked(d):
+            self.cursor_ok.append(key)
         elif sys.getwindowsversion().build >= 18362:  # «Windows 10» — с Windows 10 1903
             self.req.set_input_settings(d["source"], {"method": 2}, True)
             log.warning(t("Windows рисует курсор прямо в картинку экрана (крупный указатель или масштаб экрана) — "
@@ -277,9 +354,13 @@ class Obs:
         self.started.clear()
         self.stopped.clear()
         self.out_path, self.pauses, self.files = None, [], []
-        self.req.start_record()
-        if not self.started.wait(10):
-            raise RuntimeError(t("OBS не подтвердил старт записи за 10 с"))
+        self.own, self.stopping = True, False
+        try:
+            self.req.start_record()
+            if not self.started.wait(10):
+                raise RuntimeError(t("OBS не подтвердил старт записи за 10 с"))
+        finally:
+            self.own = False
         return self.t_started
 
     def elapsed(self):
@@ -293,9 +374,15 @@ class Obs:
         (self.req.resume_record if self.elapsed()[1] else self.req.pause_record)()
 
     def stop(self):
-        resp = self.req.stop_record()
-        self.stopped.wait(60)  # STOPPED приходит, когда файл дописан
-        return Path(self.out_path or resp.output_path)
+        """Останавливает запись и возвращает путь видео. Её могли уже остановить кнопкой в OBS — тогда только путь."""
+        self.stopping, path = True, None
+        try:
+            if not self.stopped.is_set():
+                path = self.req.stop_record().output_path
+                self.stopped.wait(60)  # STOPPED приходит, когда файл дописан
+            return Path(self.out_path or path)
+        finally:
+            self.stopping = False
 
 
 def parse_hotkey(s):
@@ -356,8 +443,12 @@ class Recorder:
             raise ConnectionError(t("не удалось подключиться к OBS ws://{}:{} ({}). OBS запущен? Websocket включён "
                                     "(Сервис → Настройки сервера WebSocket)? Порт и пароль верны?")
                                   .format(c["host"], c["port"], e))
-        self.obs.prepare(c)
-        self.cfg, self.rec = cfg, None
+        try:
+            self.obs.prepare(c)  # загружающийся OBS соединения принимает, а на запросы отвечает отказом
+        except Exception:
+            self.close()
+            raise
+        self.cfg, self.rec, self.display = cfg, None, None
 
     @property
     def recording(self):
@@ -377,8 +468,22 @@ class Recorder:
         except Exception:
             logger.stop()
             raise
-        self.rec = (logger, t0)
+        self.rec, self.display = (logger, t0), display
         log.info(t("● Запись идёт"))
+
+    def adopt(self):
+        """Запись начали кнопкой в самом OBS: подхватываем её. Лог курсора стартует на долю секунды позже видео — эти
+        кадры курсор стоит в первой записанной точке. Проверки курсора здесь нет: она двигает его, а запись уже идёт.
+        Если в сцене нет захвата экрана, курсор рисовать не на чем — только значок с паузой и стопом."""
+        try:
+            display = self.pick_display()
+            logger = wc.CursorLogger(display, self.cfg["logger"]["hz"])
+            logger.start()
+        except LookupError as e:
+            log.warning("%s", str(e).split("\n")[0])
+            display, logger = wc.primary(), None
+        self.rec, self.display = (logger, self.obs.t_started), display
+        log.info(t("● Запись идёт (начата в OBS)"))
 
     def stop(self):
         """Останавливает запись и кладёт лог курсора рядом с каждым её файлом (OBS может разбивать запись).
@@ -390,7 +495,10 @@ class Recorder:
             log.error(t("Не удалось остановить запись в OBS: %s"), e)
             video = None
         finally:
-            logger.stop()
+            if logger:
+                logger.stop()
+        if not logger:
+            return []
         if video:
             files = self.obs.files or [(t0, None)]
             files[-1] = (files[-1][0], video)  # последний файл точно называет событие остановки

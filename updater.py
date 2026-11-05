@@ -5,7 +5,7 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
-VERSION = "1.5.4"
+VERSION = "1.6.0"
 REPO = "fggtf24-cyber/smooth-cursor-obs"
 ASSET = "SmoothCursor-Setup.exe"
 PAGE = f"https://github.com/{REPO}/releases/latest"
@@ -37,18 +37,24 @@ def latest():
             "sha256": digest.split(":", 1)[1].lower() if digest.startswith("sha256:") else None}
 
 
-def download(info, progress=lambda pct: None):
-    """Скачивает установщик во временную папку, сверяет размер и SHA256. Возвращает путь."""
-    out = Path(tempfile.gettempdir()) / f"SmoothCursor-Setup-{info['version']}.exe"
+def fetch(url, out, size=None, sha256=None, progress=lambda pct: None):
+    """Скачивает файл и сверяет размер и SHA256 (если они известны). Возвращает путь."""
     h, done = hashlib.sha256(), 0
-    req = urllib.request.Request(info["url"], headers={"User-Agent": "SmoothCursor"})
+    req = urllib.request.Request(url, headers={"User-Agent": "SmoothCursor"})
     with urllib.request.urlopen(req, timeout=30) as r, open(out, "wb") as f:
         while chunk := r.read(1 << 16):
             f.write(chunk)
             h.update(chunk)
             done += len(chunk)
-            progress(done * 100 / info["size"])
-    if done != info["size"] or (info["sha256"] and h.hexdigest() != info["sha256"]):
-        out.unlink(missing_ok=True)
-        raise RuntimeError("файл обновления повреждён (не совпала контрольная сумма)")
+            if size:
+                progress(done * 100 / size)
+    if (size and done != size) or (sha256 and h.hexdigest() != sha256):
+        Path(out).unlink(missing_ok=True)
+        raise RuntimeError("файл скачался с ошибкой (не совпала контрольная сумма)")
     return out
+
+
+def download(info, progress=lambda pct: None):
+    """Скачивает установщик во временную папку. Возвращает путь."""
+    out = Path(tempfile.gettempdir()) / f"SmoothCursor-Setup-{info['version']}.exe"
+    return fetch(info["url"], out, info["size"], info["sha256"], progress)

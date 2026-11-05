@@ -17,6 +17,7 @@ import yaml
 from pathlib import Path
 from tkinter import font as tkfont
 
+import autostart
 from updater import VERSION
 
 APP = "Smooth Cursor"
@@ -48,7 +49,8 @@ TXT = {
     "copying": ("Устанавливаю…", "Installing…"), "done": ("Готово. Smooth Cursor установлен.", "Done. Smooth Cursor is installed."),
     "removed": ("Smooth Cursor удалён. Настройки и записи остались на месте.",
                 "Smooth Cursor was removed. Your settings and recordings were kept."),
-    "running": ("Закройте Smooth Cursor и нажмите ещё раз.", "Close Smooth Cursor and try again."),
+    "running": ("Закройте Smooth Cursor (значок у часов → Выход) и нажмите ещё раз.",
+                "Close Smooth Cursor (tray icon → Exit) and try again."),
     "head_i": ("Установка", "Install"), "head_u": ("Удаление", "Uninstall"), "head_up": ("Обновление", "Updating"),
     "waiting": ("Жду, пока закроется программа…", "Waiting for the app to close…"), "retry": ("Ещё раз", "Retry"),
 }
@@ -108,6 +110,7 @@ def install(desktop, progress):
 
 
 def uninstall():
+    autostart.sync(False)
     for lnk in (START_MENU / f"{APP}.lnk", DESKTOP / f"{APP}.lnk"):
         lnk.unlink(missing_ok=True)
     try:
@@ -281,6 +284,7 @@ class Window:
 
         def work():
             try:
+                autostart.signal(autostart.STOP)  # фоновый процесс держит файлы программы; она запустит его снова
                 deadline = time.time() + 15  # программа закрывается сама; ждём до 15 с
                 while app_running():
                     if time.time() > deadline:
@@ -339,6 +343,8 @@ class Window:
         if self.done:
             subprocess.Popen([str(TARGET / EXE)], cwd=str(TARGET))
             return self.root.destroy()
+        autostart.signal(autostart.STOP)  # у фонового процесса то же имя exe, а файлы программы он держит открытыми
+        time.sleep(0.3)
         if app_running():
             return self.status.config(text=tr("running"), fg=RED)
         self.btn.set_enabled(False)

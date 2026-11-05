@@ -1,4 +1,8 @@
 """Smooth Cursor — окно программы. Запуск: двойной клик по app.pyw (или python app.pyw)."""
+import autostart
+
+autostart.boot()  # фоновый режим и вторая копия заканчиваются здесь, до тяжёлых импортов
+
 import collections
 import copy
 import ctypes as C
@@ -31,6 +35,7 @@ try:
     import render
     import settings
     import updater
+    import vdisplay
     from i18n import t
     from smooth_cursor import HotkeyThread, Recorder, parse_hotkey, rerender_paths
 except Exception:
@@ -250,6 +255,20 @@ def pixel_logo(parent):
     return c
 
 
+def float_window(win, exclude=True):
+    """Плашка поверх всего: не видна захвату экрана (ни в OBS, ни на видео), нет в панели задач и Alt+Tab, клик не забирает
+    фокус. Где Windows прятать не умеет — OSError: иначе плашка попала бы в запись. Возвращает HWND."""
+    win.update_idletasks()
+    u, hwnd = wc.user32, W.HWND(int(win.wm_frame(), 16))
+    if exclude and not u.SetWindowDisplayAffinity(hwnd, 0x11):  # WDA_EXCLUDEFROMCAPTURE
+        win.destroy()
+        raise OSError(t("Windows не умеет прятать значок записи от захвата экрана (нужна Windows 10 2004 или новее)"))
+    u.SetWindowLongW(hwnd, -20, u.GetWindowLongW(hwnd, -20) | 0x80 | 0x80000 | 0x08000000)
+    pref = C.c_int(2)  # скруглённые углы, как у окон Windows 11 (на Windows 10 — просто прямоугольник)
+    C.windll.dwmapi.DwmSetWindowAttribute(hwnd, 33, C.byref(pref), 4)
+    return hwnd
+
+
 class RecOverlay(tk.Toplevel):
     """Значок записи в углу записываемого экрана, как у Bandicam, с кнопками паузы и стопа. Его видите только вы:
     Windows исключает окно из захвата экрана (WDA_EXCLUDEFROMCAPTURE, Windows 10 2004+), так что ни в OBS, ни на видео
@@ -295,23 +314,18 @@ class RecOverlay(tk.Toplevel):
         c.bind("<ButtonPress-1>", self.drag_start)
         c.bind("<B1-Motion>", self.drag_move)
         c.bind("<ButtonRelease-1>", self.drag_end)
-        self.update_idletasks()
-        u, hwnd = wc.user32, W.HWND(int(self.wm_frame(), 16))
+        u, hwnd = wc.user32, float_window(self, exclude)
         self.hwnd = hwnd
-        if exclude and not u.SetWindowDisplayAffinity(hwnd, 0x11):  # WDA_EXCLUDEFROMCAPTURE
-            self.destroy()
-            raise OSError(t("Windows не умеет прятать значок записи от захвата экрана (нужна Windows 10 2004 или новее)"))
-        # нет в панели задач и Alt+Tab, клик не забирает фокус
-        u.SetWindowLongW(hwnd, -20, u.GetWindowLongW(hwnd, -20) | 0x80 | 0x80000 | 0x08000000)
-        pref = C.c_int(2)  # скруглённые углы, как у окон Windows 11 (на Windows 10 — просто прямоугольник)
-        C.windll.dwmapi.DwmSetWindowAttribute(hwnd, 33, C.byref(pref), 4)
+        mons = [m for m in wc.list_monitors() if not m["virtual"]] or wc.list_monitors()
+        if display.get("virtual"):  # виртуальный экран виден только в проекторе, а значок скрыт от захвата
+            display = wc.primary(mons)
         self.deiconify()
         self.update_idletasks()
         r = W.RECT()
         with wc.physical():  # координаты экранов — в настоящих пикселях
             u.GetWindowRect(hwnd, C.byref(r))
             if not (pos and any(m["left"] <= pos[0] < m["left"] + m["width"] and m["top"] <= pos[1] < m["top"] +
-                                m["height"] for m in wc.list_monitors())):  # не ставили или того монитора нет
+                                m["height"] for m in mons)):  # не ставили или того монитора нет
                 m = round(16 * display["dpi"] / 96)  # правый верхний угол записываемого экрана
                 pos = (display["left"] + display["width"] - (r.right - r.left) - m, display["top"] + m)
             self.move(*pos)
@@ -351,6 +365,55 @@ class RecOverlay(tk.Toplevel):
         for b in self.bars:  # на паузе вместо «пауза» — «продолжить»
             c.itemconfig(b, state="hidden" if paused else "normal")
         c.itemconfig(self.play, state="normal" if paused else "hidden")
+
+
+class RenderToast(tk.Toplevel):
+    """Рендер в правом нижнем углу основного экрана, пока окно программы скрыто: запись, полоса, проценты, сколько осталось.
+    Закончился — «Готово», клик открывает видео. Крестик отменяет рендер; закончившийся — просто закрывает плашку."""
+    W_, H, CELLS, OFF = 340, 78, 25, "#3A3A3A"
+
+    def __init__(self, root, on_x, on_open, exclude=True):
+        super().__init__(root, bg=RecOverlay.BG)
+        self.withdraw()  # до исключения из захвата — ни одного кадра на экране
+        self.overrideredirect(True)
+        self.attributes("-topmost", True, "-alpha", 0.98)
+        W_, H = self.W_, self.H
+        c = self.c = tk.Canvas(self, width=W_, height=H, bg=RecOverlay.BG, highlightthickness=0, bd=0)
+        c.pack()
+        self.name = c.create_text(14, 18, anchor="w", fill=RecOverlay.FG, font=F["mono_s"])
+        step = (W_ - 28) / self.CELLS
+        self.cells = [c.create_rectangle(14 + i * step, 32, 14 + (i + 1) * step - 3, 42, fill=self.OFF, outline="")
+                      for i in range(self.CELLS)]
+        self.left = c.create_text(14, 60, anchor="w", fill=RecOverlay.FG, font=F["mono_s"])
+        self.right = c.create_text(W_ - 14, 60, anchor="e", fill=MUTE, font=F["mono_s"])
+        c.create_rectangle(W_ - 30, 6, W_ - 6, 30, fill=RecOverlay.BG, outline="", tags="x")
+        for a, b in ((-5, 5), (5, -5)):
+            c.create_line(W_ - 18 + a, 18 - 5, W_ - 18 + b, 18 + 5, fill=MUTE, width=2, tags="x")
+        self.out, self.on_open = None, on_open
+        c.tag_bind("x", "<Button-1>", lambda e: on_x())
+        c.bind("<Button-1>", self.click)
+        self.hwnd = float_window(self, exclude)
+        self.deiconify()
+        self.update_idletasks()
+        r = W.RECT()
+        with wc.physical():  # координаты экранов — в настоящих пикселях
+            wc.user32.GetWindowRect(self.hwnd, C.byref(r))
+            x, y = wc.corner_pos(wc.primary(), r.right - r.left, r.bottom - r.top)
+            wc.user32.SetWindowPos(self.hwnd, W.HWND(-1), x, y, 0, 0, 0x1 | 0x10)  # TOPMOST; NOSIZE|NOACTIVATE
+
+    def click(self, e):
+        if self.out and "x" not in self.c.gettags("current"):
+            self.on_open(self.out)
+
+    def show(self, name, pct, left, right, fg=RecOverlay.FG, out=None):
+        c, self.out = self.c, out
+        c.itemconfig(self.name, text=name if len(name) < 34 else name[:33] + "…")
+        c.itemconfig(self.left, text=left, fill=fg)
+        c.itemconfig(self.right, text=right)
+        on = round(self.CELLS * min(pct, 100) / 100)
+        for i, cell in enumerate(self.cells):
+            c.itemconfig(cell, fill=RecOverlay.FG if i < on else self.OFF)
+        c.config(cursor="hand2" if out else "arrow")
 
 
 class LivePreview(tk.Canvas):
@@ -719,8 +782,13 @@ class UpdateCard(tk.Frame):
 
 
 class Onboarding(tk.Frame):
-    """Первая настройка поверх окна: язык → подключение OBS → экран и fps → сохранение → готово."""
-    STEPS = 5
+    """Первая настройка поверх окна: язык → подключение OBS → экран и fps → сохранение → как работать → готово."""
+    STEPS = 6
+    MODES = (("tray", "В трее — запись кнопкой в OBS",
+              "Программа сама запускается вместе с OBS и ждёт у часов. Нажимаете «Начать запись» в OBS — она подхватит "
+              "запись и покажет значок с паузой и стопом."),
+             ("window", "Обычное окно — запись кнопкой здесь",
+              "Открываете Smooth Cursor сами, когда нужно, и нажимаете «Начать запись» в нём или горячую клавишу."))
 
     def __init__(self, app, step=0):
         super().__init__(app.root, bg=BG)
@@ -728,6 +796,8 @@ class Onboarding(tk.Frame):
         self.mon_choice = next((m["device"].split("\\")[-1] for m in app.monitors if m["left"] == m["top"] == 0),
                                app.monitors[0]["device"].split("\\")[-1])
         self.fps = 60
+        ui = app.cfg["ui"]
+        self.mode = "tray" if ui["tray"] or not ui["onboarded"] else "window"
         self.place(x=0, y=0, relwidth=1, relheight=1)
         self.lift()
         page = tk.Frame(self, bg=BG)
@@ -779,7 +849,7 @@ class Onboarding(tk.Frame):
         self.draw_art()
         title, builder = ((t("Привет.\nНастроим?"), self.s_hello), (t("Подключим\nOBS."), self.s_obs),
                           (t("Что\nзаписываем."), self.s_screen), (t("Куда и чем\nсохранять."), self.s_save),
-                          (t("Готово."), self.s_done))[self.step]
+                          (t("Как\nработать."), self.s_mode), (t("Готово."), self.s_done))[self.step]
         head = tk.Canvas(self.left, width=620, height=150 if "\n" in title else 80, bg=BG, highlightthickness=0)
         for i, line in enumerate(title.split("\n")):
             head.create_text(-4, i * 72, anchor="nw", text=line, font=F["head"], fill=INK)
@@ -835,8 +905,15 @@ class Onboarding(tk.Frame):
         self.render_step()
 
     def finish(self):
-        self.app.cfg["ui"]["onboarded"] = True
-        settings.save(self.app.cfg)
+        a, ui = self.app, self.app.cfg["ui"]
+        ui["with_obs"] = ui["tray"] = self.mode == "tray"
+        ui["onboarded"] = True
+        settings.save(a.cfg)
+        a.with_obs_changed()
+        for row, path in a.start_rows:  # галочки на вкладке OBS
+            tg = row.winfo_children()[0]
+            tg.value = get(a.cfg, path)
+            tg.draw()
         self.destroy()
 
     # --- шаги ---
@@ -992,9 +1069,39 @@ class Onboarding(tk.Frame):
         else:
             a.lbl(self.enc_row, "■ " + t("ffmpeg есть, кодирует: ") + a.encoder_text()).pack(anchor="w")
 
+    def s_mode(self, p):
+        """Два режима карточками: выбранная — чёрная. Применяется на последнем шаге."""
+        a, cards = self.app, {}
+
+        def pick(mode):
+            self.mode = mode
+            for m, (box, head, text) in cards.items():
+                on = m == mode
+                for w in (box, head, text):
+                    w.config(bg=INK if on else BG)
+                head.config(fg=BG if on else INK)
+                text.config(fg=LINE if on else INK2)
+
+        for mode, title, text in self.MODES:
+            box = tk.Frame(p, bg=BG, cursor="hand2", highlightthickness=1, highlightbackground=INK)
+            box.pack(fill="x", pady=(12, 0))
+            head = a.lbl(box, t(title), "btn_b", cursor="hand2")
+            head.pack(anchor="w", padx=16, pady=(12, 3))
+            body = a.lbl(box, t(text), "body", INK2, justify="left", wraplength=560, cursor="hand2")
+            body.pack(anchor="w", padx=16, pady=(0, 12))
+            cards[mode] = box, head, body
+            for w in cards[mode]:
+                w.bind("<Button-1>", lambda e, m=mode: pick(m))
+        pick(self.mode)
+        a.lbl(p, t("Поменять можно потом: вкладка OBS → «Запуск»."), "small", MUTE).pack(anchor="w", pady=(4, 0))
+
     def s_done(self, p):
-        self.para(p, t("Нажмите {} или «Начать запись», чтобы записать экран. Когда остановите, рядом с записью "
-                       "появится видео с плавным курсором.").format(self.app.cfg["hotkey"]))
+        if self.mode == "tray":
+            self.para(p, t("Откройте OBS и нажмите в нём «Начать запись» — программа запустится сама. Когда остановите, "
+                           "рядом с записью появится видео с плавным курсором. Значок программы — у часов."))
+        else:
+            self.para(p, t("Нажмите {} или «Начать запись», чтобы записать экран. Когда остановите, рядом с записью "
+                           "появится видео с плавным курсором.").format(self.app.cfg["hotkey"]))
         self.para(p, t("Справа в окне — живое превью: двигайте мышью, чтобы увидеть, как будет выглядеть курсор. "
                        "Настройки сглаживания, клика и шлейфа — во вкладках. Эту настройку можно открыть снова "
                        "кнопкой «Настройка»."), MUTE)
@@ -1007,9 +1114,12 @@ class App:
         self.q = queue.Queue()                    # (функция, аргументы) из рабочих потоков → поток окна
         self.worker = ThreadPoolExecutor(1)       # OBS: подключение, старт/стоп записи
         self.renderer = ThreadPoolExecutor(1)     # рендеры по очереди
-        self.recorder = self.hotkey = None
+        self.recorder = self.hotkey = self.tray = None
+        self.connecting, self.conn_fails = False, 0  # идёт подключение; сколько раз подряд оно не удалось
+        self.vd_busy, self.vd_msg = False, None  # виртуальный монитор: занят; что показать вместо обычной подсказки
         self.state, self.rec_t0, self.pending, self.cancel, self._save_job = "offline", 0, 0, False, None
         self.overlay = None  # значок записи в углу экрана
+        self.toast = self.toast_timer = self.job = None  # плашка рендера; когда её убрать; что рендерится сейчас
         self.folder_pending = False  # папка выбрана без связи с OBS — применить при подключении
         self.monitors = wc.list_monitors()
         self.detected, self.last_fps, self.log_lines, self.log_win = None, None, [], None
@@ -1061,7 +1171,7 @@ class App:
         log.setLevel(logging.INFO)
         logging.getLogger("obsws_python").setLevel(logging.CRITICAL)
         root.report_callback_exception = lambda *e: log.error("".join(traceback.format_exception(*e)))
-        root.protocol("WM_DELETE_WINDOW", self.on_close)
+        root.protocol("WM_DELETE_WINDOW", self.close_window)
         self.root.after(50, self.pump)
         self.apply_hotkey(initial=True)
         self.refresh_list()
@@ -1070,7 +1180,76 @@ class App:
         if not self.cfg["ui"]["onboarded"]:
             self.open_onboarding()
         self.root.after(2000, self.watch_monitors)
+        self.root.after(3000, self.watch_obs)
         self.root.after(3000, lambda: threading.Thread(target=self._check_update, daemon=True).start())
+        self.start_tray()
+        try:
+            autostart.sync(self.cfg["ui"]["with_obs"])
+        except OSError as e:
+            log.warning(t("Не удалось настроить запуск вместе с OBS: %s"), e)
+        threading.Thread(target=autostart.on_show, args=(lambda: self.post(self.show_window),), daemon=True).start()
+        ui = self.cfg["ui"]
+        if not ("--with-obs" in sys.argv and ui["tray"] and ui["onboarded"] and self.tray):
+            root.deiconify()
+
+    def start_tray(self):
+        """Значок у часов: окно, запись, виртуальный монитор, выход."""
+        try:
+            import pystray
+        except ImportError as e:
+            return log.warning("%s", e)
+        item = pystray.MenuItem
+        self.tray = pystray.Icon("SmoothCursor", Image.open(BASE / "assets" / "icon.png"), APP, pystray.Menu(
+            item(lambda i: t("Открыть Smooth Cursor"), lambda: self.post(self.show_window), default=True),
+            item(lambda i: t("Остановить запись") if self.state == "recording" else t("Начать запись"),
+                 lambda: self.post(self.toggle), enabled=lambda i: self.state in ("idle", "recording")),
+            item(lambda i: t("Виртуальный монитор"), lambda: self.post(self.toggle_virtual),
+                 checked=lambda i: self.cfg["virtual"]["on"], enabled=lambda i: not self.vd_busy),
+            pystray.Menu.SEPARATOR,
+            item(lambda i: t("Выход"), lambda: self.post(self.on_close))))
+        self.tray.run_detached()
+
+    def show_window(self):
+        r = self.root
+        r.deiconify()
+        r.lift()
+        r.attributes("-topmost", True)  # Windows не отдаёт фокус фоновым программам — вперёд вывести так
+        r.attributes("-topmost", False)
+        r.focus_force()
+        self.sync_toast()
+
+    def close_window(self):
+        """Крестик: в трей, если так настроено, иначе выход."""
+        if self.cfg["ui"]["tray"] and self.tray:
+            self.root.withdraw()
+            self.sync_toast()
+        else:
+            self.on_close()
+
+    def watch_obs(self):
+        """OBS закрыли — отпустить его, открыли — подключиться самим. Что закрыли, видно только по оборванной связи:
+        процесс закрытого OBS может висеть ещё долго. Открытый видно по процессу, поэтому только свой, не по сети."""
+        self.root.after(3000, self.watch_obs)
+        if self.connecting:
+            return
+        if self.recorder and not self.recorder.obs.ev.worker.is_alive():  # поток событий живёт, пока есть связь
+            self.worker.submit(self._obs_gone)
+        elif not self.recorder and self.state == "offline" and self.cfg["obs"]["host"] in ("localhost", "127.0.0.1", "::1"):
+            if autostart.obs_running():
+                self.connect(quiet=True)
+            else:
+                self.conn_fails = 0
+
+    def _obs_gone(self):
+        """Закрыть соединения сразу: OBS не завершается, пока они открыты, а запущенный рядом с таким OBS новый остаётся
+        без браузерного движка и не закрывается вовсе."""
+        r, self.recorder = self.recorder, None
+        if not r:
+            return
+        if r.recording:  # OBS упал посреди записи — лог курсора всё равно сохраним
+            self.post(self.on_stopped, r.stop())
+        r.close()
+        self.post(self.set_state, "offline")
 
     def watch_monitors(self):
         """Мониторы могли поменяться (подключили, сменили разрешение) — схема и живое превью берут свежие."""
@@ -1081,6 +1260,7 @@ class App:
             for p in (getattr(self, "picker", None), getattr(self.onboarding, "picker", None)):
                 if p and p.winfo_exists():
                     p.draw()
+            self.virtual_ui()
 
     # ---------- обновления ----------
     def _check_update(self):
@@ -1262,7 +1442,7 @@ class App:
         ck = self.toggle_row(left, t("Проверять перед записью, что курсора нет в кадре"), "obs.check_cursor")
         ck.pack(anchor="w", pady=(6, 0))
         self.hint_on((ck, *ck.winfo_children()), "Проверка курсора",
-                     "не попал ли курсор в кадр OBS (бывает на 4K); если да — захват на «Windows 10». Раз за запуск.")
+                     "не попал ли курсор в кадр OBS (бывает на 4K); если да — захват на «Windows 10». Один раз на экран.")
         now = tk.Frame(left, bg=BG)
         now.pack(anchor="w", pady=(22, 0))
         top_now = tk.Frame(now, bg=BG)
@@ -1907,6 +2087,11 @@ class App:
         Btn(row, t("Применить"), lambda: self.apply_hotkey(self.hotkey_var.get()), small=True).pack(side="left",
                                                                                                     padx=10)
         self.lbl(row, "F9, ctrl+shift+R, alt+F10", "small", MUTE).pack(side="left")
+        g, _ = self.section(l, "Запуск")
+        self.start_rows = ((self.toggle_row(g, "Запускать вместе с OBS", "ui.with_obs", self.with_obs_changed), "ui.with_obs"),
+                           (self.toggle_row(g, "Работать в трее: с OBS — без окна, крестик сворачивает", "ui.tray"), "ui.tray"))
+        for i, (row, _) in enumerate(self.start_rows):
+            row.grid(row=i, column=0, columnspan=3, sticky="w", pady=3)
 
         g, h = self.section(r, "Что записывать")
         self.display_seg = self.segmented(h, "display", {"auto": "Авто — по сцене OBS"},
@@ -1916,6 +2101,151 @@ class App:
         self.picker.grid(row=0, column=0, columnspan=3, sticky="ew")
         self.toggle_row(g, "Выключать захват курсора в источниках сцены", "obs.disable_capture_cursor").grid(
             row=1, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        g, h = self.section(r, "Виртуальный монитор")
+        self.vd_btn = Btn(h, "", self.toggle_virtual, small=True)
+        self.vd_btn.pack(side="right")
+        self.vd_show = Btn(h, t("Показать экран"), self.virtual_window, small=True)
+        self.lbl(g, t("Разрешение")).grid(row=0, column=0, sticky="w", pady=3)
+        row = tk.Frame(g, bg=BG)
+        row.grid(row=0, column=1, columnspan=2, sticky="w")
+        self.vd_sizes = self.segmented(row, "virtual.size", vdisplay.SIZES, self.virtual_size)
+        self.vd_sizes.pack(side="left", padx=(0, 6))
+        e, self.vd_size_var = self.entry(row, "virtual.size", width=11, live=False)
+        e.pack(side="left", ipady=3)
+        e.bind("<Return>", lambda _: self.virtual_size(self.vd_size_var.get()))
+        Btn(row, t("Применить"), lambda: self.virtual_size(self.vd_size_var.get()), small=True).pack(side="left",
+                                                                                                    padx=(6, 0))
+        self.lbl(g, t("Частота, Гц")).grid(row=1, column=0, sticky="w", pady=3)
+        self.segmented(g, "virtual.hz", {hz: str(hz) for hz in vdisplay.RATES}, lambda _: self.virtual_apply()).grid(
+            row=1, column=1, columnspan=2, sticky="w")
+        self.vd_text = self.lbl(g, "", "small", MUTE, anchor="w", justify="left", wraplength=500)
+        self.vd_text.grid(row=2, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        self.virtual_ui()
+
+    def with_obs_changed(self):
+        try:
+            autostart.sync(self.cfg["ui"]["with_obs"])
+        except OSError as e:
+            log.warning(t("Не удалось настроить запуск вместе с OBS: %s"), e)
+
+    # ---------- виртуальный монитор ----------
+    def virtual_ui(self, msg=None):
+        """Кнопки и подсказка раздела. msg — что происходит прямо сейчас."""
+        if not hasattr(self, "vd_btn"):
+            return
+        if msg is not None:
+            self.vd_msg = (msg, INK2)
+        on, d = self.cfg["virtual"]["on"], next((m for m in self.monitors if m["virtual"]), None)
+        self.vd_btn.set_text(t("Выключить") if on else t("Включить"))
+        self.vd_btn.set_enabled(not self.vd_busy)
+        if on and d and not self.vd_busy:
+            self.vd_show.pack(side="right", padx=(0, 8))
+        else:
+            self.vd_show.pack_forget()
+        if on and d:
+            text = t("Включён: {} · {}×{}. Уведите курсор за край экрана — окно OBS покажет, что там.") \
+                .format(d["device"].split("\\")[-1], d["width"], d["height"])
+        elif on:
+            text = t("Монитора нет в Windows — выключите и включите снова.")
+        else:
+            text = t("Отдельный экран только для записи: ваш монитор остаётся свободным. "
+                     "Включите — драйвер, OBS и окно с этим экраном настроятся сами.")
+        text, fg = self.vd_msg or (text, MUTE)
+        self.vd_text.config(text=text, fg=fg)
+        if self.tray:
+            self.tray.update_menu()
+
+    def virtual_job(self, job):
+        """Скачивание и запрос прав — надолго, поэтому в своём потоке; потом настройка OBS."""
+        self.vd_busy = True
+        self.virtual_ui()
+
+        def work():
+            err = None
+            try:
+                job()
+            except Exception as e:
+                err = t(str(e))
+                log.error(t("Виртуальный монитор: %s"), err)
+            self.post(self.virtual_done, err)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def virtual_done(self, err):
+        self.vd_busy, self.vd_msg = False, (err, RED) if err else None
+        self.monitors = wc.list_monitors()
+        self.picker.draw()
+        self.schedule_save()
+        self.virtual_ui()
+        self.worker.submit(self._virtual_obs)
+
+    def toggle_virtual(self):
+        if self.vd_busy:
+            return
+        if self.state == "recording":
+            return messagebox.showwarning(APP, t("Идёт запись — сначала остановите её."))
+        v = self.cfg["virtual"]
+        on = not v["on"]
+
+        def job():
+            if on:
+                vdisplay.turn_on(v["size"], v["hz"], lambda s: self.post(self.virtual_ui, s))
+            else:
+                vdisplay.turn_off()
+            v["on"] = on
+
+        self.virtual_job(job)
+
+    def virtual_size(self, text):
+        """Разрешение: кнопка или своё в поле. Кнопки подсвечивают только то, что совпало с ними."""
+        try:
+            size = vdisplay.parse_size(text)
+        except ValueError as e:
+            self.vd_msg = (str(e), RED)
+            return self.virtual_ui()
+        self.cfg["virtual"]["size"] = size
+        self.schedule_save()
+        self.vd_size_var.set(size)
+        for k, b in zip(vdisplay.SIZES, self.vd_sizes.winfo_children()):
+            b.selected = k == size
+            b.draw()
+        self.virtual_apply()
+
+    def virtual_apply(self):
+        """Выключенному монитору настройка пригодится при включении, а во время записи менять экран нельзя."""
+        v = self.cfg["virtual"]
+        self.vd_msg = None
+        if self.state == "recording":
+            self.virtual_ui(t("Идёт запись — разрешение сменится при следующем включении монитора."))
+        elif v["on"] and not self.vd_busy:
+            self.virtual_job(lambda: vdisplay.apply(v["size"], v["hz"], lambda s: self.post(self.virtual_ui, s)))
+        else:
+            self.virtual_ui()
+
+    def virtual_window(self):
+        if not self.recorder:
+            return self.virtual_ui(t("Откройте OBS — окно с экраном появится само."))
+        self.worker.submit(self._virtual_obs)
+
+    def _virtual_obs(self):
+        """Приводит OBS к настройке: монитор включён — его сцена и проектор; выключен — вернуть как было.
+        Зовётся и при подключении к OBS: монитор могли переключить, пока OBS был закрыт."""
+        r, v = self.recorder, self.cfg["virtual"]
+        if not r or r.recording:
+            return
+        d = vdisplay.monitor() if v["on"] else None
+        try:
+            if d:
+                if not v["prev"]:
+                    v["prev"] = r.obs.video_state() | {"display": self.cfg["display"]}
+                r.obs.show_virtual(d)
+                self.post(self.pick_monitor, "auto")
+            elif not v["on"] and v["prev"]:
+                r.obs.restore(v["prev"])
+                self.post(self.pick_monitor, v["prev"]["display"])
+                v["prev"] = None
+        except Exception as e:
+            log.error(t("Виртуальный монитор: %s"), e)
 
     def pick_monitor(self, name):
         self.cfg["display"] = name
@@ -1933,6 +2263,8 @@ class App:
                                "recording": "■  " + t("Остановить")}[state])
         self.rec_btn.set_enabled(state != "busy")
         self.key_lbl.config(text=self.cfg["hotkey"])
+        if self.tray:
+            self.tray.update_menu()
         if state != "recording":
             self.sync_overlay()
             self.time_lbl.config(text="00:00", fg=LINE)
@@ -1967,31 +2299,72 @@ class App:
         else:
             self.connect()
 
-    def connect(self):
+    def connect(self, quiet=False):
+        """quiet — автоподключение: окно не мигает «подключением», а про сбой говорим, только если он затянулся."""
         if self.recorder and self.recorder.recording:
             return messagebox.showwarning(APP, t("Идёт запись — сначала остановите её."))
-        self.set_state("busy")
-        self.set_spec(obs="connecting")
+        self.connecting = True
+        if not quiet:
+            self.set_state("busy")
+            self.set_spec(obs="connecting")
 
         def work():
-            if self.recorder:
-                self.recorder.close()
-                self.recorder = None
             try:
-                r = Recorder(self.cfg)
-                v = r.obs.req.get_version()
-                if self.folder_pending:  # папку выбрали, пока OBS был недоступен
-                    self._set_obs_folder(self.cfg["ui"]["folder"], r)
-                folder = str(Path(r.obs.req.get_record_directory().record_directory))
-            except Exception as e:
-                log.error("%s", e)
-                self.last_error = str(e)
-                return self.post(self.set_state, "offline")
-            self.recorder = r
-            self.post(self.on_online, v.obs_version, folder)
-            self._check_display()
+                self._connect(quiet)
+            finally:
+                self.connecting = False
 
         self.worker.submit(work)
+
+    def _connect(self, quiet):
+        if self.recorder:
+            self.recorder.close()
+            self.recorder = None
+        r = None
+        try:
+            r = Recorder(self.cfg)
+            v = r.obs.req.get_version()
+            if self.folder_pending:  # папку выбрали, пока OBS был недоступен
+                self._set_obs_folder(self.cfg["ui"]["folder"], r)
+            folder = str(Path(r.obs.req.get_record_directory().record_directory))
+        except Exception as e:
+            if r:
+                r.close()
+            self.last_error = str(e)
+            self.conn_fails += 1
+            if not quiet or self.conn_fails == 10:  # попытка раз в 3 с: столько OBS может просто загружаться
+                log.error("%s", e)
+                if quiet and self.tray:  # окна может не быть вовсе
+                    self.tray.notify(t("OBS открыт, но не подключается. Включён ли WebSocket?"), APP)
+            return self.post(self.set_state, "offline")
+        self.conn_fails = 0
+        r.obs.external = lambda kind: self.worker.submit(self._external, r, kind)
+        self.recorder = r
+        self.post(self.on_online, v.obs_version, folder)
+        self._virtual_obs()
+        self._check_display()
+        self._check_cursor(r)
+
+    def _check_cursor(self, r):
+        """Проверка курсора заранее: запись, начатая кнопкой в OBS, ждать её не может."""
+        c = self.cfg["obs"]
+        try:
+            if c["disable_capture_cursor"] and c["check_cursor"] and not r.obs.req.get_record_status().output_active:
+                r.obs.check_cursor(r.pick_display())
+                self.post(self.schedule_save)
+        except Exception as e:
+            log.debug("cursor check: %s", e)
+
+    def _external(self, r, kind):
+        """В самом OBS нажали «Начать запись» или «Остановить запись» — как будто нажали здесь."""
+        try:
+            if kind == "stopped" and r.recording:
+                self.post(self.on_stopped, r.stop())
+            elif kind == "started" and not r.recording:
+                r.adopt()
+                self.post(self.on_started)
+        except Exception as e:
+            log.error(t("Ошибка: %s"), e)
 
     def on_online(self, version, folder):
         self.set_spec(obs="online", version=version)
@@ -2062,6 +2435,7 @@ class App:
         self.rec_t0 = time.time()
         self.set_state("recording")
         self.sync_overlay()
+        self.schedule_save()  # проверка курсора могла добавить захват в настройки
 
     def overlay_moved(self, x, y):
         self.cfg["ui"]["overlay_pos"] = [x, y]  # в следующий раз — там же
@@ -2085,7 +2459,7 @@ class App:
         want = self.cfg["ui"]["rec_overlay"] and self.state == "recording" and self.recorder and self.recorder.recording
         if want and not (self.overlay and self.overlay.winfo_exists()):
             try:
-                self.overlay = RecOverlay(self.root, self.recorder.rec[0].display, self.toggle_pause, self.toggle,
+                self.overlay = RecOverlay(self.root, self.recorder.display, self.toggle_pause, self.toggle,
                                           self.cfg["ui"]["overlay_pos"], self.overlay_moved)
             except (OSError, tk.TclError) as e:
                 self.overlay = None
@@ -2325,8 +2699,9 @@ class App:
         self.renderer.submit(self._render, video, log_path, copy.deepcopy(self.cfg), clip, then)
 
     def _render(self, video, log_path, cfg, clip, then=None):
-        self.cancel = False
+        self.cancel, out = False, None
         self.post(self.prog_text.config, {"text": f"{t('превью') if clip else t('рендер')} · {video.stem}", "fg": INK})
+        self.post(self.render_started, video.stem)
         try:
             out = render.render(video, log_path, cfg, progress=self._progress, clip=clip)
             if clip:
@@ -2336,22 +2711,79 @@ class App:
         except Exception as e:
             log.error("%s: %s", t("Превью не удалось") if clip else t("Рендер не удался"), e)
         finally:
-            self.post(self.render_done)
+            self.post(self.render_done, out)
 
     def _progress(self, pct):
-        self.post(self.set_progress, pct)
+        self.post(self.render_tick, pct)
         return self.cancel
+
+    def render_started(self, name):
+        self.job = {"name": name, "pct": 0, "t0": None, "p0": 0}
+        self.sync_toast()
+
+    def render_tick(self, pct):
+        self.set_progress(pct)
+        j = self.job
+        if j:
+            j["pct"] = pct
+            if j["t0"] is None and pct > 0:  # подготовка до первого кадра в скорость рендера не входит
+                j["t0"], j["p0"] = time.monotonic(), pct
+            self.sync_toast()
+
+    def open_toast(self):
+        """Плашка рендера: есть — она же, нет — новая. Где Windows не умеет её прятать — None."""
+        if self.toast_timer:
+            self.root.after_cancel(self.toast_timer)
+            self.toast_timer = None
+        if not self.toast:
+            try:
+                self.toast = RenderToast(self.root, self.toast_x, os.startfile)
+            except (OSError, tk.TclError) as e:
+                log.warning("%s", e)
+        return self.toast
+
+    def close_toast(self):
+        if self.toast_timer:
+            self.root.after_cancel(self.toast_timer)
+        if self.toast and self.toast.winfo_exists():
+            self.toast.destroy()
+        self.toast = self.toast_timer = None
+
+    def toast_x(self):
+        if self.job:
+            self.cancel_render()
+        else:
+            self.close_toast()
+
+    def sync_toast(self):
+        """Плашка нужна, только пока окно скрыто: в окне прогресс и так виден. Без рендера здесь остаётся «Готово»."""
+        j = self.job
+        if self.root.state() == "normal":
+            self.close_toast()
+        elif j and self.open_toast():
+            left = render.eta_left(j["p0"], j["pct"], time.monotonic() - j["t0"]) if j["t0"] else None
+            more = t(" · ещё {}").format(self.pending - 1) if self.pending > 1 else ""
+            self.toast.show(j["name"], j["pct"], f"{min(j['pct'], 100):.0f}%{more}", render.eta_text(left))
 
     def set_progress(self, pct):
         self.gauge.set(pct)
         self.prog_pct.config(text=f"{min(pct, 100):.0f}%")
 
-    def render_done(self):
+    def render_done(self, out=None):
         self.pending -= 1
         self.refresh_list()
+        j, self.job = self.job, None
         if not self.pending:
             self.prog_text.config(text=t("нет задач"), fg=MUTE)
             self.set_progress(0)
+            if self.cancel or self.root.state() == "normal":
+                self.close_toast()
+            elif j and self.open_toast():
+                if out:
+                    self.toast.show(j["name"], 100, t("Готово"), t("открыть видео ›"), out=out)
+                else:
+                    self.toast.show(j["name"], 0, t("Рендер не удался"), t("подробности в журнале"), RED)
+                self.toast_timer = self.root.after(10_000, self.close_toast)
 
     def cancel_render(self):
         self.cancel = True
@@ -2386,6 +2818,8 @@ class App:
             self._log_insert(text, tag)
 
     def on_close(self):
+        if (self.recorder and self.recorder.recording) or self.pending:
+            self.show_window()  # спросим про запись и рендер — окно могло быть в трее
         if self.recorder and self.recorder.recording:
             if not messagebox.askyesno(APP, t("Идёт запись. Остановить её и выйти?")):
                 return
@@ -2402,6 +2836,8 @@ class App:
             self.hotkey.stop()
         if self.recorder:
             self.recorder.close()
+        if self.tray:
+            self.tray.stop()
         self.root.destroy()
         os._exit(0)  # не ждать фоновые потоки (рендер уже отменён)
 
@@ -2412,6 +2848,7 @@ def main():
     # текст и линии чёткие. Только для этого потока — запись, рендер и хоткей идут в настоящих пикселях.
     wc.user32.SetThreadDpiAwarenessContext(C.c_void_p(-5))  # DPI_AWARENESS_CONTEXT_UNAWARE_GDISCALED
     root = tk.Tk()
+    root.withdraw()  # покажет App, если не запускается в трей
     root.tk.call("tk", "scaling", 96 / 72)  # вёрстка в «пикселях при 100%», дальше растягивает Windows
     App(root)
     root.mainloop()
