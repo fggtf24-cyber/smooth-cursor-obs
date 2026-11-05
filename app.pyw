@@ -509,7 +509,8 @@ class LivePreview(tk.Canvas):
                     self.sets[(n, "big")] = wc.cursor_sprite(n, size * 4, self.custom)
                 return self.sets[(n, "big")]
             if isinstance(ghost, str):  # шаг смены вида: ghost — прежний вид, level — шаг
-                img, hot = render.morph_sprite(*big(ghost), *big(name), level / render.MORPH_STEPS, rc["morph_bounce"])
+                img, hot = render.morph_sprite(*big(ghost), *big(name), level / render.MORPH_STEPS, rc["morph_bounce"],
+                                               deg=tilt * render.TILT_STEP_DEG)
             elif ghost is not None:
                 _, hot, img = self.cursor(name, 0, tilt)
                 a = render.ghost_alphas(rc)[ghost]
@@ -626,7 +627,7 @@ class LivePreview(tk.Canvas):
             held = np.inf if down else (self.release_t - self.press_t) * 1000  # пока ЛКМ зажата — наклон держится
             level = int(round(float(render.click_curve((now - self.press_t) * 1000, rc["click_ms"], held))
                               * (render.CLICK_STEPS - 1)))
-        if level or morph:  # после клика и смены вида наклон возвращается плавно
+        if level:  # после клика наклон возвращается плавно
             self.click_anim_t = now
         (ta, xa), (tb, xb) = self.trail[max(0, len(self.trail) - 2)][:2], self.trail[-1][:2]
         target = float(render.tilt_angle((xb - xa) / max(tb - ta, 1e-3) / (mon["width"] * s),
@@ -636,9 +637,8 @@ class LivePreview(tk.Canvas):
         # при клике цель 0: наклон не обрывается, а сходит на нет, поворот клика ложится поверх
         self.tilt_deg += (target - self.tilt_deg) * (1 - math.exp(-steps / render.TILT_SMOOTH_MS))
         tilt = round(self.tilt_deg / render.TILT_STEP_DEG)
-        if morph:  # смена вида — без шлейфа, клика и наклона, как при рендере
-            self.tilt_deg = 0.0
-            im, (hx, hy), _ = self.cursor(name, morph, 0, ghost=self.morph[0])
+        if morph:  # смена вида — без шлейфа и клика, но с наклоном, как при рендере
+            im, (hx, hy), _ = self.cursor(name, morph, render.ghost_tilt(tilt), ghost=self.morph[0])
             return ops.append((round(qx - hx, 1), round(qy - hy, 1), im))
         if rc["motion_blur"] and level == 0:
             alphas = render.ghost_alphas(rc)

@@ -358,17 +358,29 @@ def check_morph():
     for amount in (0, 0.12, 0.3):  # отскок: проскакивает ровно на заданное, в конце — ровно 1 и без рывка
         g = [render.bounce_curve(u, amount) for u in np.linspace(0, 1, 401)]
         assert abs(max(g) - 1 - amount) < 0.002 and g[0] == 0 and abs(g[-1] - 1) < 1e-9 and abs(g[-1] - g[-2]) < 1e-3,             ("отскок", amount, max(g))
-    # с наклоном в движении: спрайты перехода без наклона — к смене вида он сходит на нет и возвращается, без рывка
+    # с наклоном в движении: смена вида его не трогает — на ходу курсор так и остаётся наклонённым
     cfg = copy.deepcopy(settings.DEFAULTS)
     cfg["render"].update(morph_animation=True, motion_tilt_right_deg=72, motion_tilt_left_deg=27)
     t = np.arange(-200, 3000, 1000 / 240)
     x = np.clip(100 + 1.0 * (t - 200), 100, 3000)  # едет вправо, в 1000 мс стрелка → текстовый курсор
     lg = {"display": {"width": 3840, "height": 1080, "dpi": 96}, "types": wc.TYPES, "clicks": [],
           "samples": [[a, float(b), 300.0, int(a >= 1000), 1] for a, b in zip(t.tolist(), x)]}
-    tr = render.cursor_track(lg, {"w": 3840, "h": 1080, "fps": 30, "frames": 80}, cfg)[0]
+    info = {"w": 3840, "h": 1080, "fps": 30, "frames": 80}
+    tr = render.cursor_track(lg, info, cfg)[0]
     m = tr["morph"] > 0
-    assert m.any() and not tr["tilt"][m].any() and np.abs(np.diff(tr["tilt_deg"])).max() < 8,         ("наклон рывком у смены вида", np.abs(np.diff(tr["tilt_deg"])).max())
+    plain = render.cursor_track(lg, info, {**cfg, "render": {**cfg["render"], "morph_animation": False}})[0]
+    assert m.any() and tr["tilt"][m].all() and (tr["tilt_deg"] == plain["tilt_deg"]).all(), \
+        ("смена вида сбивает наклон", tr["tilt"][m].tolist())
     old, new = wc.cursor_sprite("arrow", 128), wc.cursor_sprite("hand", 128)
+    # в конце смены наклонённый курсор — ровно обычный наклонённый: картинка и точка клика на тех же местах
+    for deg in (-30, 40):
+        a, (ax, ay) = render.morph_sprite(*old, *new, 1, 0, deg=deg)
+        b, (bx, by) = render.pose_sprite(*new, cfg["render"], 0, deg / render.TILT_STEP_DEG)
+        canvas = [Image.new("L", (160, 160)) for _ in "ab"]
+        canvas[0].paste(a.getchannel("A"), (round(80 - ax), round(80 - ay)))
+        canvas[1].paste(b.getchannel("A"), (round(80 - bx), round(80 - by)))
+        ma, mb = (np.array(c) > 128 for c in canvas)
+        assert (ma & mb).sum() / (ma | mb).sum() > 0.9, ("наклон смены вида: не совпал с обычным", deg)
     for p, like in ((0.05, old), (0.95, new)):
         img, (hx, hy) = render.morph_sprite(*old, *new, p)
         a = np.array(img.getchannel("A")) > 128
@@ -378,7 +390,8 @@ def check_morph():
     cfg = settings.load()
     cfg["sync"]["offset_ms"] = 0
     cfg["render"].update(codec="libx264", morph_animation=True, morph_ms=200, click_animation=True,
-                         motion_blur=True, debug_raw=False, export_keyframes=False)
+                         motion_blur=True, debug_raw=False, export_keyframes=False, motion_tilt_right_deg=72,
+                         motion_tilt_left_deg=27)
     ff = render.tool(cfg["render"]["ffmpeg"], "ffmpeg")
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)

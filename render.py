@@ -89,10 +89,11 @@ def bounce_curve(u, amount):
     return 1 - (1 - u) ** 3 + _bump(round(float(amount), 3)) * math.sin(math.pi * u) ** 2 * u
 
 
-def morph_sprite(old, old_hot, new, new_hot, p, bounce=0.12, k=0.25):
+def morph_sprite(old, old_hot, new, new_hot, p, bounce=0.12, k=0.25, deg=0):
     """Смена вида курсора, p 0..1: за первые MORPH_OUT прежний сжимается в точку (к своему центру, с ускорением),
     затем новый плавно вырастает из точки с одним мягким отскоком — проскакивает на bounce крупнее и возвращается. old/new — спрайты в 1/k размера (по умолчанию 4×, как для анимации клика),
-    результат — в обычном. Точка клика (hotspot) нового — на месте. Возвращает (картинка, hotspot)."""
+    результат — в обычном. Точка клика (hotspot) нового — на месте. deg — наклон в движении, вокруг hotspot, как у
+    pose_sprite. Возвращает (картинка, hotspot)."""
     if p < MORPH_OUT:
         img, hot, scale = old, old_hot, 1 - (p / MORPH_OUT) ** 2
     else:
@@ -102,8 +103,10 @@ def morph_sprite(old, old_hot, new, new_hot, p, bounce=0.12, k=0.25):
         return Image.new("RGBA", (1, 1)), (0, 0)
     x0, y0, x1, y1 = img.getbbox() or (0, 0, *img.size)
     c = ((x0 + x1) / 2, (y0 + y1) / 2)
-    im, (cx, cy) = press_sprite(img, c, scale * k, 0)
-    return im, (cx - (c[0] - hot[0]) * k, cy - (c[1] - hot[1]) * k)  # центр — там же, где у несжатого
+    im, (cx, cy) = press_sprite(img, c, scale * k, deg)
+    dx, dy, a = (c[0] - hot[0]) * k, (c[1] - hot[1]) * k, math.radians(deg)
+    # центр — там же, где у несжатого курсора, повёрнутого на deg вокруг hotspot
+    return im, (cx - dx * math.cos(a) - dy * math.sin(a), cy + dx * math.sin(a) - dy * math.cos(a))
 
 
 def morph_steps(kind, vis, fps, ms):
@@ -150,7 +153,7 @@ def smooth_tilt(deg, fps):
 def frame_tilt(v, ok, level, fps, right_deg, left_deg, step=TILT_STEP_DEG):
     """Наклон по кадрам, в шагах step (None — в градусах, без округления): tilt_angle по скорости v (там, где не ok,
     — 0), сглаженный по времени.
-    На кадрах анимации клика (level > 0; смены вида курсора — тоже) — 0: у клика свой поворот, а пары «шаг клика × шаг наклона» дали бы сотни
+    На кадрах анимации клика (level > 0) — 0: у клика свой поворот, а пары «шаг клика × шаг наклона» дали бы сотни
     спрайтов. Рендер знает будущее, поэтому наклон плавно сходит на нет к клику и возвращается после него
     (за TILT_RAMP_MS, по smoothstep) — без рывка даже при клике на полном ходу."""
     n = np.arange(len(level))
@@ -295,7 +298,7 @@ def tag(stream, key):
 def make_sprites(work, types, poses, size, rc, custom=None, morphs=()):
     """PNG для каждого слота; возвращает [(слот, файл, hot_x, hot_y)] в порядке наложения (снизу вверх).
     poses — {(тип, шаг клика, шаг наклона)}, которые есть в видео: спрайты только для них; morphs — {(прежний тип,
-    новый тип, шаг смены вида)}."""
+    новый тип, шаг смены вида, шаг наклона)}."""
     big = {}
 
     def big_of(t):  # поворот и масштаб с 4× запасом и уменьшение — без мыла и лесенки
@@ -319,8 +322,8 @@ def make_sprites(work, types, poses, size, rc, custom=None, morphs=()):
                 g.putalpha(img.getchannel("A").point(lambda v: round(v * a)))
                 slots.append((f"g{gi}_{t}{tilt_tag(gk)}", g, hot))
     slots += [(f"{t}_{lvl}{tilt_tag(k)}", img, hot) for (t, lvl, k), (img, hot) in mains.items()]
-    slots += [(f"m{m}_{a}_{b}", *morph_sprite(*big_of(a), *big_of(b), m / MORPH_STEPS,
-                                                       rc["morph_bounce"])) for a, b, m in sorted(morphs)]
+    slots += [(f"m{m}_{a}_{b}{tilt_tag(k)}", *morph_sprite(*big_of(a), *big_of(b), m / MORPH_STEPS, rc["morph_bounce"],
+                                                            deg=k * TILT_STEP_DEG)) for a, b, m, k in sorted(morphs)]
     if rc["debug_raw"]:
         img, hot = mains.get(("arrow", 0, 0)) or wc.cursor_sprite("arrow", size)
         a = np.array(img, float)
@@ -338,8 +341,8 @@ def sprite_name(track, n, types, have):
     """Тип курсора в кадре n и его спрайт с учётом шагов анимации клика и наклона (нет такого — обычный курсор)."""
     t = types[track["type"][n]] if track["type"][n] < len(types) else "arrow"
     t = t if f"{t}_0" in have else "arrow"
-    if track["morph"][n]:  # смена вида курсора: шаг важнее клика и наклона
-        m = f"m{track['morph'][n]}_{types[track['prev'][n]]}_{t}"
+    if track["morph"][n]:  # смена вида курсора: шаг важнее клика
+        m = f"m{track['morph'][n]}_{types[track['prev'][n]]}_{t}{tilt_tag(ghost_tilt(track['tilt'][n]))}"
         if m in have:
             return t, m
     main = f"{t}_{track['level'][n]}{tilt_tag(track['tilt'][n])}"
@@ -539,9 +542,9 @@ def cursor_track(lg, info, cfg, ghost_ms=()):
     # там, где курсор появляется или пропадает, разница позиций — скачок, а не скорость
     ok = vis & np.r_[vis[1:], True] & np.r_[True, vis[:-1]]
     track["morph"], track["prev"] = morph_steps(track["type"], vis, fps, rc["morph_ms"]) if rc["morph_animation"]         else (np.zeros(len(vis), int), track["type"])
-    # смена вида курсора — как клик: спрайты перехода без наклона, поэтому наклон к ней плавно сходит на нет
-    track["tilt_deg"] = np.where(vis, frame_tilt(v, ok, np.maximum(track["level"], track["morph"]), fps,
-                                                 rc["motion_tilt_right_deg"], rc["motion_tilt_left_deg"], step=None), 0.0)
+    # смена вида курсора наклон не трогает: спрайты перехода наклоняются как обычные
+    track["tilt_deg"] = np.where(vis, frame_tilt(v, ok, track["level"], fps, rc["motion_tilt_right_deg"],
+                                                 rc["motion_tilt_left_deg"], step=None), 0.0)
     track["tilt"] = np.round(track["tilt_deg"] / TILT_STEP_DEG).astype(int)
     zoom = abs(kx * ky * (a * e - b * d)) ** 0.5  # во сколько раз захват увеличен на видео
     size = max(4, round(wc.cursor_base_size() * disp["dpi"] / 96 * rc["cursor_scale"] * zoom))
@@ -603,9 +606,11 @@ def render(video, log_path, cfg, progress=None, clip=None):
     track, to_video, (cl, ct, cr, cb), size = cursor_track(lg, info, cfg, ghost_ms)
     vis, types = track["visible"], lg["types"]
     used = sorted({types[k] for k in np.unique(track["type"][vis])} | {"arrow"}, key=types.index)
-    poses = {(types[k], lvl, tl) for k, lvl, tl in zip(*(track[c][vis].tolist() for c in ("type", "level", "tilt")))}
     mv = vis & (track["morph"] > 0)
-    morphs = {(types[a], types[b], m) for a, b, m in zip(*(track[c][mv].tolist() for c in ("prev", "type", "morph")))}
+    poses = {(types[k], lvl, tl)
+             for k, lvl, tl in zip(*(track[c][vis & ~mv].tolist() for c in ("type", "level", "tilt")))}
+    morphs = {(types[a], types[b], m, ghost_tilt(k))  # наклон — шагом шлейфа: слоёв в ffmpeg в разы меньше
+              for a, b, m, k in zip(*(track[c][mv].tolist() for c in ("prev", "type", "morph", "tilt")))}
     if clip:
         out = Path(tempfile.gettempdir()) / f"{video.stem}_preview.mp4"
         try:
