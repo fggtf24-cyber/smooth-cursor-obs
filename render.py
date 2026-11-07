@@ -9,6 +9,7 @@ import json
 import logging
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -242,6 +243,7 @@ def install_ffmpeg(progress=lambda pct: None):
 # Кодировщики по порядку предпочтения: NVIDIA, AMD, Intel, затем процессор (работает везде, но медленнее)
 ENCODERS = ("hevc_nvenc", "hevc_amf", "hevc_qsv", "libx264")
 _working = {}
+_graph_option = {}
 
 
 def encoder_works(ffmpeg, codec):
@@ -251,6 +253,15 @@ def encoder_works(ffmpeg, codec):
                             "-c:v", codec, "-f", "null", "-"], capture_output=True, creationflags=CREATE_NO_WINDOW)
         _working[(ffmpeg, codec)] = r.returncode == 0
     return _working[(ffmpeg, codec)]
+
+
+def graph_option(ffmpeg):
+    """Как передать граф фильтров файлом: «-/filter_complex» появилась в ffmpeg 7, а в дистрибутивах Linux бывает 4 и 6."""
+    if ffmpeg not in _graph_option:
+        out = subprocess.run([ffmpeg, "-version"], capture_output=True, text=True, creationflags=CREATE_NO_WINDOW).stdout
+        m = re.match(r"ffmpeg version n?(\d+)\.", out)  # у ночных сборок вместо номера дата или git: они новые
+        _graph_option[ffmpeg] = "-filter_complex_script" if m and int(m[1]) < 7 else "-/filter_complex"
+    return _graph_option[ffmpeg]
 
 
 def pick_encoder(ffmpeg, codec):
@@ -665,7 +676,7 @@ def render(video, log_path, cfg, progress=None, clip=None):
         cmd += ["-i", str(video)]
         for name, png, *_ in slots:
             cmd += blur_in if name == "blur" else ["-i", png]
-        cmd += ["-/filter_complex", "graph.txt", "-map", f"[v{len(slots)}]", "-map", "0:a?", "-c:a", "copy",
+        cmd += [graph_option(ffmpeg), "graph.txt", "-map", f"[v{len(slots)}]", "-map", "0:a?", "-c:a", "copy",
                 "-c:v", codec, *encoder_args(codec, rc["cq"], rc["preset"]), "-fps_mode", "passthrough",
                 "-colorspace", info["space"], "-color_range", info["range"],
                 "-color_trc", info["trc"], "-color_primaries", info["primaries"]]

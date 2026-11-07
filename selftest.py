@@ -146,12 +146,13 @@ def check_render():
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         video = tmp / "src.mp4"
+        codecs = [c for c in ("hevc_nvenc", "av1_nvenc") if render.encoder_works(ff, c)] + ["libx264"]  # в CI видеокарты нет
         subprocess.run([ff, "-v", "error", "-f", "lavfi", "-i", "color=c=gray:s=5120x2160:r=30:d=2", "-f", "lavfi",
-                        "-i", "sine=d=2", "-c:v", "hevc_nvenc", "-c:a", "aac", str(video)], check=True)
+                        "-i", "sine=d=2", "-c:v", codecs[0], "-c:a", "aac", str(video)], check=True)
         log = synth_log()
         log["display"].update(width=5120, height=2160)
         (tmp / "src.cursor.json").write_text(json.dumps(log))
-        for codec in ("hevc_nvenc", "av1_nvenc", "libx264"):
+        for codec in codecs:
             cfg["render"]["codec"] = codec
             out = render.render(video, tmp / "src.cursor.json", cfg)
             src, dst = render.probe(render.tool(cfg["render"]["ffmpeg"], "ffprobe"), video), \
@@ -169,7 +170,7 @@ def check_render():
             assert np.ptp(gone) < 10, "после ухода с дисплея курсор должен скрыться"
             assert np.abs(stand - np.median(gone)).max() > 60, "курсора нет там, где он должен стоять"
             print(f"render {codec}: ок, {dst['w']}x{dst['h']} @ {dst['fps']:g} fps, {dst['frames']} кадров")
-            if codec == "hevc_nvenc":  # превью с 1.0 с: кадры совпадают с полным рендером, включая уход в 1.5 с
+            if codec == codecs[0]:  # превью с 1.0 с: кадры совпадают с полным рендером, включая уход в 1.5 с
                 prev = render.render(video, tmp / "src.cursor.json", cfg, progress=lambda pct: False, clip=(1.0, 0.7))
                 for k in range(12, 19):
                     assert np.abs(crop(prev, k) - crop(out, 30 + k)).max() < 20, ("превью сдвинуто во времени", k)
@@ -704,6 +705,19 @@ def xcursor_file(sizes):
     return head + toc + chunks
 
 
+def check_graph_option():
+    from unittest import mock
+    for banner, want in (("ffmpeg version 4.4.2-0ubuntu0.22.04.1 Copyright", "-filter_complex_script"),
+                         ("ffmpeg version n6.1.1 Copyright", "-filter_complex_script"),
+                         ("ffmpeg version 7.1-essentials_build", "-/filter_complex"),
+                         ("ffmpeg version N-118000-gabcdef Copyright", "-/filter_complex")):
+        render._graph_option.clear()
+        with mock.patch.object(subprocess, "run", return_value=mock.Mock(stdout=banner)):
+            assert render.graph_option("ff") == want, banner
+    render._graph_option.clear()
+    print("граф фильтров для старого ffmpeg: ок")
+
+
 def check_linux_cursor():
     from unittest import mock
 
@@ -784,6 +798,7 @@ if __name__ == "__main__":
     check_wayland_format()
     check_wayland_portal()
     check_linux_cursor()
+    check_graph_option()
     if sys.platform == "win32":
         check_autostart()
         check_virtual_mode()
