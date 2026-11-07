@@ -243,7 +243,7 @@ def install_ffmpeg(progress=lambda pct: None):
 # Кодировщики по порядку предпочтения: NVIDIA, AMD, Intel, затем процессор (работает везде, но медленнее)
 ENCODERS = ("hevc_nvenc", "hevc_amf", "hevc_qsv", "libx264")
 _working = {}
-_graph_option = {}
+_major = {}
 
 
 def encoder_works(ffmpeg, codec):
@@ -255,13 +255,23 @@ def encoder_works(ffmpeg, codec):
     return _working[(ffmpeg, codec)]
 
 
-def graph_option(ffmpeg):
-    """Как передать граф фильтров файлом: «-/filter_complex» появилась в ffmpeg 7, а в дистрибутивах Linux бывает 4 и 6."""
-    if ffmpeg not in _graph_option:
+def ffmpeg_major(ffmpeg):
+    """Старшая версия ffmpeg: в дистрибутивах Linux бывает 4 и 6. У ночных сборок вместо номера дата: считаем новыми."""
+    if ffmpeg not in _major:
         out = subprocess.run([ffmpeg, "-version"], capture_output=True, text=True, creationflags=CREATE_NO_WINDOW).stdout
-        m = re.match(r"ffmpeg version n?(\d+)\.", out)  # у ночных сборок вместо номера дата или git: они новые
-        _graph_option[ffmpeg] = "-filter_complex_script" if m and int(m[1]) < 7 else "-/filter_complex"
-    return _graph_option[ffmpeg]
+        m = re.match(r"ffmpeg version n?(\d+)\.", out)
+        _major[ffmpeg] = int(m[1]) if m else 99
+    return _major[ffmpeg]
+
+
+def graph_option(ffmpeg):
+    """Как передать граф фильтров файлом: «-/filter_complex» появилась в ffmpeg 7."""
+    return "-filter_complex_script" if ffmpeg_major(ffmpeg) < 7 else "-/filter_complex"
+
+
+def fps_option(ffmpeg):
+    """«-fps_mode» появилась в ffmpeg 5.1."""
+    return "-vsync" if ffmpeg_major(ffmpeg) < 6 else "-fps_mode"
 
 
 def pick_encoder(ffmpeg, codec):
@@ -677,7 +687,7 @@ def render(video, log_path, cfg, progress=None, clip=None):
         for name, png, *_ in slots:
             cmd += blur_in if name == "blur" else ["-i", png]
         cmd += [graph_option(ffmpeg), "graph.txt", "-map", f"[v{len(slots)}]", "-map", "0:a?", "-c:a", "copy",
-                "-c:v", codec, *encoder_args(codec, rc["cq"], rc["preset"]), "-fps_mode", "passthrough",
+                "-c:v", codec, *encoder_args(codec, rc["cq"], rc["preset"]), fps_option(ffmpeg), "passthrough",
                 "-colorspace", info["space"], "-color_range", info["range"],
                 "-color_trc", info["trc"], "-color_primaries", info["primaries"]]
         if codec.startswith("hevc"):

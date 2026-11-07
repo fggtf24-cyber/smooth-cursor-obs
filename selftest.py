@@ -173,7 +173,9 @@ def check_render():
             if codec == codecs[0]:  # превью с 1.0 с: кадры совпадают с полным рендером, включая уход в 1.5 с
                 prev = render.render(video, tmp / "src.cursor.json", cfg, progress=lambda pct: False, clip=(1.0, 0.7))
                 for k in range(12, 19):
-                    assert np.abs(crop(prev, k) - crop(out, 30 + k)).max() < 20, ("превью сдвинуто во времени", k)
+                    assert np.abs(crop(prev, k) - crop(out, 30 + k)).max() < 20, (
+                        "превью сдвинуто во времени", k, [int(np.abs(crop(prev, k) - crop(out, 30 + k + d)).max())
+                                                          for d in (-2, -1, 0, 1, 2)])
                 prev.unlink()
                 print("превью: ок")
         assert (tmp / "src_cursor.csv").read_text(encoding="utf-8").count("\n") == src["frames"] + 1
@@ -705,17 +707,17 @@ def xcursor_file(sizes):
     return head + toc + chunks
 
 
-def check_graph_option():
+def check_old_ffmpeg():
     from unittest import mock
-    for banner, want in (("ffmpeg version 4.4.2-0ubuntu0.22.04.1 Copyright", "-filter_complex_script"),
-                         ("ffmpeg version n6.1.1 Copyright", "-filter_complex_script"),
-                         ("ffmpeg version 7.1-essentials_build", "-/filter_complex"),
-                         ("ffmpeg version N-118000-gabcdef Copyright", "-/filter_complex")):
-        render._graph_option.clear()
+    for banner, want in (("ffmpeg version 4.4.2-0ubuntu0.22.04.1 Copyright", ("-filter_complex_script", "-vsync")),
+                         ("ffmpeg version n6.1.1 Copyright", ("-filter_complex_script", "-fps_mode")),
+                         ("ffmpeg version 7.1-essentials_build", ("-/filter_complex", "-fps_mode")),
+                         ("ffmpeg version N-118000-gabcdef Copyright", ("-/filter_complex", "-fps_mode"))):
+        render._major.clear()
         with mock.patch.object(subprocess, "run", return_value=mock.Mock(stdout=banner)):
-            assert render.graph_option("ff") == want, banner
-    render._graph_option.clear()
-    print("граф фильтров для старого ffmpeg: ок")
+            assert (render.graph_option("ff"), render.fps_option("ff")) == want, banner
+    render._major.clear()
+    print("старый ffmpeg: ок")
 
 
 def check_linux_cursor():
@@ -798,7 +800,7 @@ if __name__ == "__main__":
     check_wayland_format()
     check_wayland_portal()
     check_linux_cursor()
-    check_graph_option()
+    check_old_ffmpeg()
     if sys.platform == "win32":
         check_autostart()
         check_virtual_mode()
