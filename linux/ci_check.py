@@ -71,6 +71,7 @@ def check_x11():
         raise SystemExit("второй захват хоткея должен был упасть")
     hk.stop()
 
+    xdotool("mousemove", 300, 150)  # Xvfb сбрасывает курсор, когда отключается его последний клиент
     x, y, shape, down, showing = lc.pointer()
     assert (x, y) == (300, 150) and showing and not down, (x, y, showing, down)
     assert lc.cursor_sprite("arrow", 32)[0].width > 0
