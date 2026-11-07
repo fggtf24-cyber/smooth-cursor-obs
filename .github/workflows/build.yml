@@ -1,0 +1,77 @@
+name: build
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: choco install ffmpeg -y --no-progress
+      - run: pip install -r requirements.txt pyinstaller jeepney
+      - run: python selftest.py
+        env:
+          PYTHONIOENCODING: utf-8
+      - run: python build.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SmoothCursor-windows
+          path: release/SmoothCursor-Setup.exe
+
+  linux:
+    # старая Ubuntu: собранное на ней запускается и на новых дистрибутивах, наоборот — нет
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg xvfb xdotool x11-apps imagemagick adwaita-icon-theme \
+            libxfixes3 libxrandr2 fontconfig dbus mutter pipewire wireplumber libpipewire-0.3-0
+      - run: pip install -r requirements.txt pyinstaller
+      - run: xvfb-run -a python selftest.py
+      - name: X11 на настоящем сервере
+        run: xvfb-run -a python linux/ci_check.py x11
+      - name: Wayland на настоящем mutter и PipeWire
+        run: dbus-run-session -- python linux/ci_check.py wayland
+      - name: Окно программы запускается
+        run: |
+          xvfb-run -a -s "-screen 0 1600x1000x24" sh -c '
+            python app.pyw > app.log 2>&1 &
+            pid=$!
+            sleep 10
+            import -window root screen.png
+            kill -0 $pid
+            kill $pid'
+          cat app.log
+          ! grep -q Traceback app.log
+      - run: python build.py
+      - name: Собранная программа запускается
+        run: |
+          tar xzf release/SmoothCursor-linux-x86_64.tar.gz
+          HOME=$PWD/home sh SmoothCursor/install.sh
+          xvfb-run -a sh -c '
+            HOME=$PWD/home "$PWD/home/.local/bin/smooth-cursor" > built.log 2>&1 &
+            pid=$!
+            sleep 10
+            kill -0 $pid
+            kill $pid'
+          cat built.log
+          ! grep -q Traceback built.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: SmoothCursor-linux
+          path: |
+            release/SmoothCursor-linux-x86_64.tar.gz
+            screen.png
+            app.log
+            built.log

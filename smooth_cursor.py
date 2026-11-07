@@ -22,11 +22,14 @@ import numpy as np
 import obsws_python as obs
 from PIL import Image
 
-import win32cursor as wc  # первым: включает DPI awareness
+import platform_cursor as wc  # первым: включает DPI awareness
 from i18n import t
 
 log = logging.getLogger("smooth")
-CURSOR_KEY = {"monitor_capture": "capture_cursor", "window_capture": "cursor", "game_capture": "capture_cursor"}
+CURSOR_KEY = {"monitor_capture": "capture_cursor", "window_capture": "cursor", "game_capture": "capture_cursor",
+              "xshm_input": "show_cursor", "xcomposite_input": "show_cursor",
+              "pipewire-screen-capture-source": "ShowCursor", "pipewire-desktop-capture-source": "ShowCursor",
+              "pipewire-window-capture-source": "ShowCursor"}
 VIDEO_EXT = (".mov", ".mp4", ".mkv", ".flv", ".ts", ".m4v")
 
 
@@ -151,13 +154,14 @@ class Obs:
                         log.info(t("Выключил захват курсора в источнике «%s»"), name)
                     else:
                         log.warning(t("В источнике «%s» включён захват курсора — на видео будет два курсора"), name)
-            if kind == "monitor_capture" and on:
-                monitors.setdefault(settings[name].get("monitor_id"), (m, tr, name))
+            if kind in wc.MONITOR_KINDS and on:
+                monitors.setdefault(wc.capture_id(kind, settings[name], tr), (m, tr, name))
         d = wc.find_display(select, list(monitors))
         vs = self.req.get_video_settings()
         canvas = [vs.base_width, vs.base_height]
         if d["id"] in monitors:
             m, tr, d["source"] = monitors[d["id"]]
+            wc.adjust_display(d, tr)
             d["method"] = settings[d["source"]].get("method", 0)
             crop = [tr["cropLeft"], tr["cropTop"], tr["sourceWidth"] - tr["cropRight"], tr["sourceHeight"] - tr["cropBottom"]]
         else:
@@ -201,7 +205,7 @@ class Obs:
         тогда метод «Windows 10»: он отдаёт картинку без курсора."""
         w, h = d["width"], d["height"]
         self.set_video(int(fps), 1, w, h, w, h)
-        self._ensure_capture(scene, source, {"monitor_id": d["id"], "capture_cursor": False, "method": 0})
+        self._ensure_capture(scene, source, d, False)
         try:
             item = self.req.get_scene_item_id(scene, source).scene_item_id
         except Exception:
@@ -221,14 +225,15 @@ class Obs:
             self.req.set_profile_parameter("Video", name, str(value))
         self.req.send("SetVideoSettings", {"fpsNumerator": fps_num, "fpsDenominator": fps_den})
 
-    def _ensure_capture(self, scene, source, props):
-        """Сцена и захват экрана в ней. method в props: 0 — авто, 1 — DXGI, 2 — Windows 10."""
+    def _ensure_capture(self, scene, source, d, cursor):
+        """Сцена и захват экрана d в ней. На Windows method: 0 — авто, 1 — DXGI, 2 — Windows 10."""
+        kind, props = wc.capture_input(d, cursor, self.req.get_input_kind_list(False).input_kinds)
         if scene not in [s["sceneName"] for s in self.req.get_scene_list().scenes]:
             self.req.create_scene(scene)
         if source in [i["inputName"] for i in self.req.get_input_list().inputs]:
             self.req.set_input_settings(source, props, True)
         else:
-            self.req.create_input(scene, source, "monitor_capture", props, True)
+            self.req.create_input(scene, source, kind, props, True)
 
     def video_state(self):
         """Текущие сцена и видео OBS — чтобы вернуть их, когда виртуальный монитор выключат."""
@@ -251,7 +256,7 @@ class Obs:
 
     def show_projector(self, d):
         """Окно OBS с виртуальным монитором: уже открыто — на передний план, иначе — на половину основного монитора."""
-        self._ensure_capture(self.PSCENE, self.PSOURCE, {"monitor_id": d["id"], "capture_cursor": True, "method": 0})
+        self._ensure_capture(self.PSCENE, self.PSOURCE, d, True)
         u, hwnd = wc.user32, wc.find_window(self.PSOURCE)
         if hwnd:
             u.ShowWindow(W.HWND(hwnd), 9)  # SW_RESTORE
@@ -281,7 +286,9 @@ class Obs:
         """Перед записью и при настройке: не попадает ли курсор в кадр захвата экрана d["source"], хотя захват курсора
         выключен. Если попадает — метод захвата «Windows 10 (1903 и новее)», он отдаёт картинку без курсора. Проверка
         двигает курсор, поэтому делается раз на захват при этих экране, масштабе и размере курсора: результат хранится
-        в настройках."""
+        в настройках. На Linux курсор в кадр не впекается: система рисует его отдельным слоем."""
+        if sys.platform != "win32":
+            return
         key = "|".join(map(str, (d.get("source"), d["id"], d.get("method"), d["width"], d["height"], d["dpi"],
                                  wc.cursor_base_size())))
         if not d.get("source") or d.get("method") == 2 or key in self.cursor_ok:
@@ -430,6 +437,10 @@ class HotkeyThread(threading.Thread):
         if self.tid and self.is_alive():
             wc.user32.PostThreadMessageW(self.tid, 0x0012, 0, 0)  # WM_QUIT
             self.join(2)
+
+
+if sys.platform != "win32":
+    from linuxcursor import HotkeyThread, parse_hotkey  # noqa: F811
 
 
 class Recorder:

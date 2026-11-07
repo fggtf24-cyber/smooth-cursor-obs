@@ -1,7 +1,9 @@
 """Самопроверка без OBS: python selftest.py"""
 import copy
 import json
+import struct
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -11,7 +13,7 @@ from PIL import Image
 import render
 import settings
 import smoothing
-import win32cursor as wc
+import platform_cursor as wc
 
 SM = settings.DEFAULTS["smoothing"]
 
@@ -577,16 +579,221 @@ def check_virtual_mode():
     print("режим монитора: ок")
 
 
+def pod_walk(data):
+    """Разбирает POD как libspa: (тип, тело) и проверяет выравнивание. Если формат собран неверно, тут упадёт."""
+    size, kind = struct.unpack_from("<II", data)
+    body = data[8:8 + size]
+    assert len(body) == size and len(data) >= 8 + size + -size % 8, "POD короче заявленного"
+    return kind, body, data[8 + size + -size % 8:]
+
+
+def check_wayland_format():
+    import waylandcursor as wl
+    assert wl.pod_id(2) == bytes.fromhex("04000000 03000000 02000000 00000000")
+    kind, body, rest = pod_walk(wl.format_pod())
+    assert (kind, rest) == (wl.T_OBJECT, b"") and struct.unpack_from("<II", body) == (wl.OBJ_FORMAT, wl.PARAM_ENUM_FORMAT)
+    props, body = {}, body[8:]
+    while body:
+        key, flags = struct.unpack_from("<II", body)
+        props[key], _, body = (lambda k, b, r: ((k, b), None, r))(*pod_walk(body[8:]))
+        assert flags == 0
+    assert list(props) == [1, 2, 0x20001, 0x20003, 0x20004], props
+    assert props[1] == (wl.T_ID, struct.pack("<I", 2))
+    kind, b = props[0x20003]  # размер: выбор из диапазона, значения по 8 байт без заголовков
+    assert kind == wl.T_CHOICE and struct.unpack_from("<IIII", b) == (wl.CHOICE_RANGE, 0, 8, wl.T_RECT) and len(b) == 16 + 24
+    kind, b = props[0x20001]
+    assert struct.unpack_from("<IIII", b) == (wl.CHOICE_ENUM, 0, 4, wl.T_ID) and len(b) == 16 + 20
+    for p in wl.stream_params():
+        assert pod_walk(p)[0] == wl.T_OBJECT and not pod_walk(p)[2]
+
+    pixels = bytes([10, 20, 30, 255, 0, 0, 0, 0])  # 2×1, BGRA
+    head = wl.CURSOR_HEAD.pack(7, 0, 100, -5, 3, 4, wl.CURSOR_HEAD.size)
+    blob = head + wl.BITMAP_HEAD.pack(12, 2, 1, 8, wl.BITMAP_HEAD.size) + pixels
+    x, y, hx, hy, (img,) = wl.parse_cursor(lambda off, n: blob[off:off + n])
+    assert (x, y, hx, hy, img.size) == (100, -5, 3, 4, (2, 1)) and img.getpixel((0, 0)) == (30, 20, 10, 255), img.getpixel((0, 0))
+    moved = wl.CURSOR_HEAD.pack(7, 0, 1, 2, 3, 4, 0)
+    assert wl.parse_cursor(lambda off, n: moved[off:off + n]) == (1, 2, 3, 4, None), "картинка та же"
+    gone = wl.CURSOR_HEAD.pack(0, 0, 0, 0, 0, 0, 0)
+    assert wl.parse_cursor(lambda off, n: gone[off:off + n]) is None, "курсор на другом экране"
+    empty = wl.CURSOR_HEAD.pack(7, 0, 1, 2, 0, 0, 28) + wl.BITMAP_HEAD.pack(12, 0, 0, 0, 0)
+    assert wl.parse_cursor(lambda off, n: empty[off:off + n])[4] == (None,), "скрытый курсор"
+
+    src = wl.WaylandSource.__new__(wl.WaylandSource)  # разбор картинок без настоящего потока
+    src.state, src.shapes, src.shape, src.buttons = (0, 0, None, False), {}, None, {0x110}
+    src._cursor(wl.parse_cursor(lambda off, n: blob[off:off + n]))
+    x, y, shape, showing, left, right = src.read()
+    assert (x, y, showing, left, right) == (100, -5, True, True, False) and src.describe(shape)[1][1] == (3, 4)
+    src._cursor(None)
+    assert src.read()[:4] == (100, -5, shape, False), "курсор ушёл с экрана: точка та же, но не виден"
+    print("wayland: формат и метаданные: ок")
+
+
+def check_wayland_portal():
+    """Разговор с порталом на настоящих сообщениях jeepney: подписи разбираются при сборке, ответы — как у GNOME."""
+    from unittest import mock
+
+    import jeepney
+    import waylandcursor as wl
+
+    class Fd:
+        def to_raw_fd(self):
+            return 42
+
+    class Conn:
+        unique_name = ":1.77"
+
+        def __init__(self, modes=7):
+            self.calls, self.modes, self.answers = [], modes, []
+
+        def send_and_get_reply(self, msg, timeout=None):
+            msg.serialise(serial=1)  # неверная подпись падает здесь
+            f = msg.header.fields
+            member = f[jeepney.HeaderFields.member]
+            self.calls.append((member, msg.body))
+            body = {"Get": (("u", self.modes),), "OpenPipeWireRemote": (Fd(),)}.get(member, ())
+            if member in ("CreateSession", "SelectSources", "Start"):
+                self.answers.append({"CreateSession": {"session_handle": ("o", "/s/1")}, "SelectSources": {},
+                                     "Start": {"restore_token": ("s", "new-token"), "streams": (
+                                         "a(ua{sv})", [(55, {"size": ("(ii)", (1920, 1080))})])}}[member])
+            return mock.Mock(header=mock.Mock(message_type=jeepney.MessageType.method_return), body=body)
+
+        def filter(self, rule):
+            return mock.MagicMock()
+
+        def recv_until_filtered(self, queue, timeout=None):
+            return mock.Mock(body=(0, self.answers.pop(0)))
+
+        def send(self, msg):
+            self.calls.append(("Close", msg.body))
+
+        def close(self):
+            pass
+
+    with tempfile.TemporaryDirectory() as d, mock.patch("jeepney.io.blocking.open_dbus_connection", create=True) as o:
+        token = Path(d) / "sub" / "token"
+        conn = o.return_value = Conn()
+        p = wl.Portal(token)
+        assert (p.node, p.size, p.fd) == (55, (1920, 1080), 42) and token.read_text() == "new-token"
+        select = next(b for m, b in conn.calls if m == "SelectSources")[1]
+        assert select["cursor_mode"] == ("u", 4) and "restore_token" not in select
+        p.close()
+        assert conn.calls[-1][0] == "Close"
+        conn = o.return_value = Conn()
+        wl.Portal(token)
+        assert next(b for m, b in conn.calls if m == "SelectSources")[1]["restore_token"] == ("s", "new-token"), \
+            "экран спросили бы снова"
+        o.return_value = Conn(modes=3)  # Sway: положение курсора не отдаёт
+        try:
+            wl.Portal(token)
+        except RuntimeError as e:
+            assert "X11" in str(e), e
+        else:
+            raise AssertionError("без режима Metadata должна быть понятная ошибка")
+    print("wayland: портал: ок")
+
+
+def xcursor_file(sizes):
+    """Файл Xcursor: для каждого размера картинка, залитая непрозрачным красным, hotspot = размер / 4."""
+    head = b"Xcur" + struct.pack("<III", 16, 0x10000, len(sizes))
+    pos, toc, chunks = 16 + 12 * len(sizes), b"", b""
+    for s in sizes:
+        chunk = struct.pack("<IIIIIIIII", 36, 0xFFFD0002, s, 1, s, s, s // 4, s // 4, 50) + b"\x00\x00\xff\xff" * s * s
+        toc += struct.pack("<III", 0xFFFD0002, s, pos)
+        chunks += chunk
+        pos += len(chunk)
+    return head + toc + chunks
+
+
+def check_linux_cursor():
+    from unittest import mock
+
+    import linuxcursor as lc
+    img, hot, nominal = lc.read_xcursor(xcursor_file([24, 48]), 30)
+    assert (nominal, img.size, hot, img.getpixel((0, 0))) == (48, (48, 48), (12, 12), (255, 0, 0, 255))
+    assert lc.read_xcursor(xcursor_file([24, 48]), 96)[2] == 48, "крупнее нет — берём самый крупный"
+    half = lc.argb_image([0x80400000], 1, 1).getpixel((0, 0))  # красный с умножением на альфу
+    assert half[3] == 128 and abs(half[0] - 128) < 2, half
+    assert lc.argb_image([(1 << 40) | 0xFF0000FF], 1, 1).getpixel((0, 0)) == (0, 0, 255, 255), "старшие биты слова X11"
+
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        (root / "Child").mkdir()
+        (root / "Child" / "index.theme").write_text("[Icon Theme]\nInherits=Base\n")
+        (root / "Base" / "cursors").mkdir(parents=True)
+        (root / "Base" / "cursors" / "left_ptr").write_bytes(xcursor_file([32]))
+        assert lc.find_cursor(lc.CURSORS["arrow"], "Child", [root]).name == "left_ptr", "наследование темы"
+        assert lc.find_cursor(("nothing",), "Child", [root]) is None
+        with mock.patch.dict(lc.os.environ, {"XCURSOR_THEME": "Child"}), mock.patch.object(lc, "theme_dirs", lambda: [root]):
+            img, hot = lc.cursor_sprite("arrow", 64)
+            assert img.size == (64, 64) and hot == (16, 16), (img.size, hot)
+    img, hot = lc.fallback_sprite(32)
+    assert img.size == (32, 32) and img.getbbox() and hot[0] < 4
+
+    assert lc.parse_hotkey("Ctrl + Shift + F9") == (frozenset({"ctrl", "shift"}), "f9")
+    for bad in ("hyper+a", "ctrl+nope"):
+        try:
+            lc.parse_hotkey(bad)
+        except (KeyError, ValueError):
+            continue
+        raise AssertionError(bad)
+    assert (lc.KEYS["f1"], lc.KEYS["f10"], lc.KEYS["a"], lc.KEYS["m"], lc.KEYS["1"]) == (59, 68, 30, 50, 2)
+    ev = lc.EVENT.pack(0, 0, 1, 67, 1) + lc.EVENT.pack(0, 0, 2, 0, 5) + lc.EVENT.pack(0, 0, 1, 67, 2) + lc.EVENT.pack(0, 0, 1, 67, 0)
+    assert lc.key_events(ev + b"xx") == [(67, 1), (67, 0)], "автоповтор и обрывок чтения не считаем"
+
+    mons = [{"id": "0", "width": 1920, "height": 1080, "left": 0, "top": 0, "primary": True},
+            {"id": "1", "width": 2560, "height": 1440, "left": 1920, "top": 0}]
+    tr = lambda w, h: {"sourceWidth": w, "sourceHeight": h}
+    assert lc.capture_id("xshm_input", {"screen": 1}, tr(0, 0)) == "1"
+    assert lc.capture_id(lc.PIPEWIRE[0], {}, tr(2560, 1440), mons) == "1"
+    assert lc.capture_id(lc.PIPEWIRE[0], {}, tr(3840, 2160), mons) == "0", "масштаб: те же пропорции"
+    assert lc.capture_id(lc.PIPEWIRE[0], {}, tr(0, 0), mons) == "0", "поток ещё не начался"
+    d = {"width": 1920, "height": 1080, "dpi": 96}
+    lc.adjust_display(d, tr(3840, 2160))
+    assert d == {"width": 3840, "height": 2160, "dpi": 192}
+    lc.adjust_display(d, tr(0, 0))
+    assert d["width"] == 3840, "источник ещё без картинки"
+    with mock.patch.object(lc, "WAYLAND", True):
+        assert lc.capture_input({"id": "0"}, False, ["x", lc.PIPEWIRE[1]]) == (lc.PIPEWIRE[1], {"ShowCursor": False})
+    with mock.patch.object(lc, "WAYLAND", False):
+        assert lc.capture_input({"id": "1"}, False, []) == ("xshm_input", {"screen": 1, "show_cursor": False})
+
+    class Source:  # логгер Linux без экрана: движение, новый курсор, клик
+        steps = [(5, 6, "a", True, False, False), (7, 8, "b", True, True, False), (9, 9, "hid", False, False, False)]
+
+        def read(self):
+            return self.steps.pop(0) if len(self.steps) > 1 else self.steps[0]
+
+        def describe(self, shape):
+            return {"a": ("hand", None), "b": (None, lc.cursor_sprite("arrow", 8)), "hid": (None, None)}[shape]
+
+    with mock.patch.object(lc, "cursor_base_size", return_value=24):
+        lg = lc.CursorLogger({"left": 0, "top": 0, "dpi": 96}, 2000)
+    lg.source = Source()
+    lg._thread.start()
+    while len(lg.samples) < 3:
+        lc.time.sleep(0.01)
+    lg._stop.set()
+    lg._thread.join()
+    s = lg.samples
+    assert s[0][1:] == (5, 6, lc.TYPES.index("hand"), 1) and s[1][1:] == (7, 8, len(lc.TYPES), 1) and s[2][1:] == (9, 9, 0, 0), s[:3]
+    assert [(c[1], c[2], c[3]) for c in lg.clicks] == [("L", 1, 7), ("L", 0, 9)] and "custom0" in lg.custom, lg.clicks
+    print("linux: курсоры, хоткей, логгер: ок")
+
+
 if __name__ == "__main__":
-    check_autostart()
+    check_wayland_format()
+    check_wayland_portal()
+    check_linux_cursor()
+    if sys.platform == "win32":
+        check_autostart()
+        check_virtual_mode()
+        check_custom_cursor()
     check_obs_buttons()
-    check_virtual_mode()
     check_render_toast()
     check_cursor_elsewhere()
     check_presets()
     check_smoothing()
     check_click_animation()
-    check_custom_cursor()
     check_morph()
     check_obs_transform()
     check_ae()

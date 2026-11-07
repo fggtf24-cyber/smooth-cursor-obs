@@ -1,20 +1,17 @@
 """Win32 через ctypes: DPI awareness, поиск дисплея, логгер курсора, спрайты системных курсоров."""
-import base64
 import contextlib
 import ctypes as C
 import ctypes.wintypes as W
-import io
 import os
-import re
-import threading
 import time
 import winreg
 
 import numpy as np
 from PIL import Image
 
+import cursorcore
 from autostart import running_exe  # noqa: F401 — wc.running_exe зовут ae.py и premiere.py
-from i18n import t
+from cursorcore import corner_pos  # noqa: F401 — wc.corner_pos зовёт app.pyw
 
 user32 = C.WinDLL("user32", use_last_error=True)
 gdi32 = C.WinDLL("gdi32")
@@ -137,43 +134,11 @@ def list_monitors():
 
 
 def primary(mons=None):
-    """Основной монитор: у него левый верхний угол в (0, 0)."""
-    mons = mons or list_monitors()
-    return next((m for m in mons if (m["left"], m["top"]) == (0, 0)), mons[0])
-
-
-def corner_pos(mon, w, h):
-    """Левый верх окна w×h в правом нижнем углу рабочей области монитора. Всё от самого экрана: отступы — под его
-    масштаб, панель задач с любой стороны рабочая область уже учла. Если она занимает экран до низа, панель скрывается
-    или снизу лежит док поверх экрана: поднимаем на его высоту."""
-    k = mon["dpi"] / 96
-    gap = round(16 * k)
-    _, _, right, bottom = mon["work"]
-    if bottom >= mon["top"] + mon["height"]:
-        bottom -= round(56 * k)
-    return right - w - gap, bottom - h - gap
+    return cursorcore.primary(mons or list_monitors())
 
 
 def find_display(select="auto", obs_ids=()):
-    """select: "auto" — монитор из obs_ids (захваты экрана в сцене OBS); "5120x2160" — по разрешению;
-    иначе подстрока имени/ID монитора ("DISPLAY2", "MTT1337")."""
-    mons = list_monitors()
-    s = str(select).strip().lower()
-    if s == "auto":
-        hits = [m for m in mons if m["id"] in obs_ids]
-        why = t("в текущей сцене OBS нет включённого «Захвата экрана» подключённого монитора" if not hits else
-                "в текущей сцене OBS несколько «Захватов экрана» — оставьте один или задайте display в config.yaml")
-    elif re.fullmatch(r"\d+x\d+", s):
-        hits = [m for m in mons if f"{m['width']}x{m['height']}" == s]
-        why = t("монитор {} не найден" if not hits else "мониторов {} несколько — задайте display по имени").format(s)
-    else:
-        hits = [m for m in mons if s in (m["device"] + m["id"]).lower()]
-        why = t("монитор «{}» не найден" if not hits else "под «{}» подходит несколько мониторов").format(select)
-    if len(hits) == 1:
-        return hits[0]
-    found = "\n".join(f"  {m['device']} {m['width']}x{m['height']} @({m['left']},{m['top']}) dpi {m['dpi']} {m['id']}"
-                      for m in mons)
-    raise LookupError(t("Не могу выбрать дисплей: {}. Мониторы:\n{}").format(why, found))
+    return cursorcore.find_display(list_monitors(), select, obs_ids)
 
 
 def find_window(part):
@@ -190,24 +155,9 @@ def find_window(part):
     return hits[0] if hits else None
 
 
-class CursorLogger:
-    """Опрашивает курсор в отдельном потоке. Время — perf_counter_ns, координаты — относительно дисплея."""
-
+class CursorLogger(cursorcore.BaseLogger):
     def __init__(self, display, hz=240):
-        self.display, self.period = display, 1e9 / hz
-        self.samples = []  # (t_ns, x, y, type_idx, showing)
-        self.types, self.custom = list(TYPES), {}  # + свои курсоры программ: имя → снимок (см. _capture)
-        self.ref = cursor_base_size() * display["dpi"] / 96  # размер системного курсора на экране при записи
-        self.clicks = []   # (t_ns, "L"/"R", down 1/0, x, y)
-        self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-
-    def start(self):
-        self._thread.start()
-
-    def stop(self):
-        self._stop.set()
-        self._thread.join()
+        super().__init__(display, hz, TYPES, cursor_base_size() * display["dpi"] / 96)
 
     def _run(self):
         handles = {user32.LoadCursorW(None, cid): i for i, (cid, _) in enumerate(CURSORS.values())}
@@ -231,54 +181,50 @@ class CursorLogger:
                 if down != prev[b]:
                     self.clicks.append((t, b, int(down), x, y))
                     prev[b] = down
-            nxt += self.period
-            delay = nxt - time.perf_counter_ns()
-            if delay > 0:
-                time.sleep(delay / 1e9)
-            else:
-                nxt = time.perf_counter_ns()  # отстали — не догоняем пачкой
+            nxt = self.wait_tick(nxt)
 
     def _capture(self, h, seen):
-        """Свой курсор программы (инструменты Premiere и т. п.): картинка в родном размере уходит в лог,
-        одинаковые картинки с разными хэндлами — один тип. 0 (стрелка), если снять не вышло."""
-        snap = snapshot(h, self.ref)
-        if not snap:
-            return 0
-        key = snap["png"] + repr(snap["hot"])
-        if key not in seen:
-            name = f"custom{len(self.custom)}"
-            self.custom[name] = snap
-            self.types.append(name)
-            seen[key] = len(self.types) - 1
-        return seen[key]
+        """Свой курсор программы (инструменты Premiere и т. п.): картинка в родном размере уходит в лог."""
+        return self.add_custom(snapshot(h, self.ref), seen)
 
-    def to_dict(self, t0_ns, pauses=(), end_ns=None):
-        """Лог для файла записи, начатого в t0_ns (и законченного в end_ns, если OBS разбил запись на файлы).
-        pauses — [[начало, конец или None]] пауз записи, ns: на видео их нет, поэтому сэмплы из пауз выкидываем,
-        а время после паузы сдвигаем на её длину."""
-        pauses = [(a, b) for a, b in pauses if a >= t0_ns and (end_ns is None or a < end_ns)]
 
-        def at(t):
-            """(мс на видео, попал ли момент в паузу); момент внутри паузы — её начало, то есть склейка."""
-            shift = 0
-            for a, b in pauses:
-                if t < a:
-                    break
-                if b is None or t < b:
-                    return round((a - t0_ns - shift) / 1e6, 3), True
-                shift += b - a
-            return round((t - t0_ns - shift) / 1e6, 3), False
+MONITOR_KINDS = ("monitor_capture",)  # какие источники OBS захватывают экран
 
-        lo, hi = t0_ns - 1e9, (end_ns or float("inf")) + 1e9  # с запасом в секунду по краям файла
-        samples, clicks = [], []
-        for t, x, y, k, v in self.samples:
-            if lo <= t <= hi and not (m := at(t))[1]:
-                samples.append([m[0], x, y, k, v])
-        for t, b, d, x, y in self.clicks:
-            if lo <= t <= hi and not ((m := at(t))[1] and d):  # нажатие в паузе на видео не попало, отпускание — на склейке
-                clicks.append([m[0], b, d, x, y])
-        return {"version": 1, "display": self.display, "hz": round(1e9 / self.period), "types": self.types,
-                "custom": self.custom, "samples": samples, "clicks": clicks}
+
+def capture_id(kind, settings, transform):
+    """Какой монитор снимает источник OBS: id как в list_monitors."""
+    return settings.get("monitor_id")
+
+
+def adjust_display(d, transform):
+    """На Windows размеры экрана и источника совпадают."""
+
+
+def capture_input(d, cursor, kinds):
+    """(вид источника OBS, настройки) для захвата экрана d."""
+    return "monitor_capture", {"monitor_id": d["id"], "capture_cursor": cursor, "method": 0}
+
+
+def pointer():
+    """(x, y, курсор, нажата ли левая кнопка, виден ли) сейчас, в настоящих пикселях. Курсор понимает snapshot."""
+    pt, ci = W.POINT(), CURSORINFO(cbSize=C.sizeof(CURSORINFO))
+    with physical():
+        user32.GetCursorPos(C.byref(pt))
+        if not user32.GetCursorInfo(C.byref(ci)):
+            ci.hCursor = None
+    return pt.x, pt.y, ci.hCursor, user32.GetAsyncKeyState(1) < 0, ci.flags & 1
+
+
+def system_shapes():
+    """Курсор из pointer() → имя системного вида."""
+    return {user32.LoadCursorW(None, cid): n for n, (cid, _) in CURSORS.items()}
+
+
+def work_area():
+    """Рабочая область основного экрана без панели задач: (left, top, right, bottom)."""
+    r = W.RECT()
+    user32.SystemParametersInfoW(0x30, 0, C.byref(r), 0)  # SPI_GETWORKAREA
+    return r.left, r.top, r.right, r.bottom
 
 
 def cursor_base_size():
@@ -331,11 +277,7 @@ def cursor_sprite(name, size, custom=None):
     """Курсор как RGBA и его hotspot (x, y): системный — size×size по текущей схеме Windows; свой курсор программы
     из лога (custom: {имя: снимок из CursorLogger}) — снимок в масштабе size к системному курсору при записи."""
     if custom and name in custom:
-        c = custom[name]
-        img = Image.open(io.BytesIO(base64.b64decode(c["png"]))).convert("RGBA")
-        k = size / c["ref"]
-        w, h = max(1, round(img.width * k)), max(1, round(img.height * k))
-        return img.resize((w, h), Image.LANCZOS), (c["hot"][0] * w / img.width, c["hot"][1] * h / img.height)
+        return cursorcore.custom_sprite(custom[name], size)
     cid, reg = CURSORS.get(name, CURSORS["arrow"])
     path = _cursor_file(reg)
     h = user32.LoadImageW(None, path, 2, size, size, 0x10) if path else None  # IMAGE_CURSOR, LR_LOADFROMFILE
@@ -352,11 +294,7 @@ def snapshot(h, ref):
     """Свой курсор программы по HCURSOR → {png base64 в родном размере, hot, ref} для cursor_sprite; None — не вышло.
     ref — размер системного курсора на экране в тот момент, px."""
     sp = handle_sprite(h) if h else None
-    if not sp:
-        return None
-    buf = io.BytesIO()
-    sp[0].save(buf, "PNG")
-    return {"png": base64.b64encode(buf.getvalue()).decode(), "hot": sp[1], "ref": ref}
+    return cursorcore.pack_snapshot(sp, ref) if sp else None
 
 
 def handle_sprite(h, size=0):

@@ -3,3 +3,5 @@ PyYAML>=6.0
 numpy>=1.26
 Pillow>=10.0
 pystray>=0.19
+jeepney>=0.8; sys_platform == "linux"
+python-xlib>=0.33; sys_platform == "linux"

@@ -8,6 +8,26 @@ def t(s):
 
 
 EN = {
+    # --- Linux ---
+    "Нет библиотек X11 ({}). Поставьте libx11-6, libxfixes3 и libxrandr2":
+        "X11 libraries are missing ({}). Install libx11-6, libxfixes3 and libxrandr2",
+    "Не могу подключиться к X-серверу. На Wayland нужен XWayland": "Cannot reach the X server. Wayland needs XWayland",
+    "В этой сборке OBS нет захвата экрана через PipeWire": "This OBS build has no PipeWire screen capture",
+    "Нет доступа к /dev/input. Выполните: sudo usermod -aG input $USER — и войдите заново":
+        "No access to /dev/input. Run: sudo usermod -aG input $USER — then log in again",
+    "Портал экрана: {}": "Screen portal: {}",
+    "Экран для записи курсора не выбран": "No screen was chosen for cursor recording",
+    "Этот рабочий стол не отдаёт положение курсора (нужны GNOME или KDE на Wayland). Войдите в сеанс X11":
+        "This desktop does not report the cursor position (Wayland needs GNOME or KDE). Log in to an X11 session",
+    "Нет библиотеки PipeWire ({}). Поставьте libpipewire-0.3-0": "PipeWire library is missing ({}). Install libpipewire-0.3-0",
+    "Не удалось подключиться к PipeWire": "Could not connect to PipeWire",
+    "Для курсора выбран экран %dx%d, а OBS снимает %dx%d — выберите тот же экран":
+        "The cursor stream uses a %dx%d screen but OBS captures %dx%d — choose the same screen",
+    "Поток экрана прервался: %s": "The screen stream stopped: %s",
+    "На Linux значок записи попал бы в видео — он отключён, пауза и стоп есть в OBS и в трее":
+        "On Linux the recording badge would end up in the video, so it is off: pause and stop are in OBS and the tray",
+    "Поставьте ffmpeg из репозитория своего дистрибутива, например: sudo apt install ffmpeg":
+        "Install ffmpeg from your distribution, for example: sudo apt install ffmpeg",
     # --- запись и OBS ---
     "Подключился к OBS %s (websocket %s)": "Connected to OBS %s (websocket %s)",
     "Выключил захват курсора в источнике «%s»": "Turned off cursor capture in source “%s”",

@@ -13,7 +13,7 @@ import zipfile
 from pathlib import Path
 
 import updater
-import win32cursor as wc
+import platform_cursor as wc
 from i18n import t
 
 PIPE = r"\\.\pipe\MTTVirtualDisplayPipe"

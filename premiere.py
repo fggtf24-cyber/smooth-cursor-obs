@@ -15,7 +15,7 @@ import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-import win32cursor as wc
+import platform_cursor as wc
 from i18n import t
 
 log = logging.getLogger("smooth")

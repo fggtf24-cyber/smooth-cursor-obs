@@ -6,7 +6,8 @@ from pathlib import Path
 import yaml
 
 # Настройки пользователя — в %APPDATA%: программа может стоять в Program Files, куда писать нельзя
-PATH = Path(os.environ.get("APPDATA", Path.home())) / "SmoothCursor" / "config.yaml"
+PATH = Path(os.environ.get("APPDATA") or os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") \
+    / "SmoothCursor" / "config.yaml"
 LEGACY = Path(__file__).with_name("config.yaml")  # где лежал конфиг раньше — подхватим при первом запуске
 
 DEFAULTS = {

@@ -21,7 +21,7 @@ import numpy as np
 from PIL import Image
 
 import smoothing
-import win32cursor as wc
+import platform_cursor as wc
 from i18n import t
 
 log = logging.getLogger("smooth")
@@ -184,19 +184,20 @@ def ghost_alphas(rc):
 
 
 APP_DIR = Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve().parent
-CREATE_NO_WINDOW = subprocess.CREATE_NO_WINDOW
+CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # только на Windows
 
 
 FFMPEG_HOME = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "SmoothCursor" / "ffmpeg"  # сюда ставит программа
+EXE = ".exe" if sys.platform == "win32" else ""
 FFMPEG_URLS = ("https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip",
                "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip")
 
 
 def tool(ffmpeg, name):
     """ffmpeg/ffprobe: путь из настроек; «auto» — рядом с программой, установленный программой, PATH, C:/ffmpeg."""
-    cands = [] if ffmpeg in ("", "auto") else [Path(ffmpeg).with_name(name + ".exe")]
-    cands += [APP_DIR / "ffmpeg" / f"{name}.exe", FFMPEG_HOME / f"{name}.exe", shutil.which(name),
-              Path("C:/ffmpeg/bin") / f"{name}.exe"]
+    cands = [] if ffmpeg in ("", "auto") else [Path(ffmpeg).with_name(name + EXE)]
+    cands += [APP_DIR / "ffmpeg" / f"{name}{EXE}", FFMPEG_HOME / f"{name}{EXE}", shutil.which(name),
+              Path("C:/ffmpeg/bin") / f"{name}{EXE}"]
     found = next((str(c) for c in cands if c and Path(c).is_file()), None)
     if not found:
         raise FileNotFoundError(t("{} не найден ({}) — укажите путь к ffmpeg в настройках").format(name, ffmpeg))
@@ -205,6 +206,8 @@ def tool(ffmpeg, name):
 
 def install_ffmpeg(progress=lambda pct: None):
     """Скачивает сборку ffmpeg и кладёт ffmpeg.exe/ffprobe.exe в FFMPEG_HOME. progress(pct) → True отменяет."""
+    if sys.platform != "win32":
+        raise RuntimeError(t("Поставьте ffmpeg из репозитория своего дистрибутива, например: sudo apt install ffmpeg"))
     import urllib.request
     import zipfile
     FFMPEG_HOME.mkdir(parents=True, exist_ok=True)
@@ -276,7 +279,7 @@ def probe(ffprobe, video):
                         "stream=width,height,r_frame_rate,nb_read_packets,pix_fmt,color_space,color_range,"
                         "color_transfer,color_primaries:format=duration",
                         "-of", "json", str(video)], capture_output=True, text=True,
-                       creationflags=subprocess.CREATE_NO_WINDOW)
+                       creationflags=CREATE_NO_WINDOW)
     if r.returncode:
         raise RuntimeError(t("ffprobe не смог прочитать {}: {}").format(video, r.stderr.strip()))
     j = json.loads(r.stdout)

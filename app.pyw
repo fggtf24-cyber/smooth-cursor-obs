@@ -11,6 +11,7 @@ import logging
 import math
 import os
 import queue
+import shutil
 import subprocess
 import sys
 import threading
@@ -28,7 +29,7 @@ try:
     import numpy as np
     from PIL import Image, ImageDraw, ImageFont, ImageTk
 
-    import win32cursor as wc  # первым из своих: включает DPI awareness
+    import platform_cursor as wc  # первым из своих: включает DPI awareness
     import ae
     import i18n
     import premiere
@@ -45,6 +46,9 @@ except Exception:
     raise SystemExit(1)
 
 log = logging.getLogger("smooth")
+WIN = sys.platform == "win32"
+if not WIN:
+    os.startfile = lambda path: subprocess.Popen(["xdg-open", str(path)])
 
 # Палитра: светло-серая бумага и почти чёрный, один акцент — синее свечение под курсором
 BG = CARD = "#E6E6E6"
@@ -81,15 +85,27 @@ BUNDLED = {"Inter": "Inter-Regular.ttf", "Inter Medium": "Inter-Medium.ttf", "IB
 
 def load_fonts():
     """Шрифты из папки программы (Inter, IBM Plex Mono — свободная лицензия OFL) — только для этого процесса."""
+    if not WIN:  # у X11 нет шрифтов «только для программы»: кладём в папку шрифтов пользователя
+        home = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "fonts" / "smooth-cursor"
+        home.mkdir(parents=True, exist_ok=True)
+        fresh = [f for f in (BASE / "fonts").glob("*.ttf") if not (home / f.name).exists()]
+        for f in fresh:
+            shutil.copy2(f, home)
+        if fresh and shutil.which("fc-cache"):
+            subprocess.run(["fc-cache", str(home)], check=False)
+        return
     for f in (BASE / "fonts").glob("*.ttf"):
         C.windll.gdi32.AddFontResourceExW(str(f), 0x10, 0)  # FR_PRIVATE
 
 
 def font_file(family):
     """Файл шрифта по имени семейства (для рисования текста через PIL): встроенный или установленный."""
-    import winreg
     if family in BUNDLED and (BASE / "fonts" / BUNDLED[family]).exists():
         return str(BASE / "fonts" / BUNDLED[family])
+    if not WIN:
+        r = subprocess.run(["fc-match", "-f", "%{file}", family], capture_output=True, text=True, check=False)
+        return r.stdout.strip() or None
+    import winreg
     for root in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
         try:
             with winreg.OpenKey(root, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts") as k:
@@ -259,6 +275,11 @@ def float_window(win, exclude=True):
     """Плашка поверх всего: не видна захвату экрана (ни в OBS, ни на видео), нет в панели задач и Alt+Tab, клик не забирает
     фокус. Где Windows прятать не умеет — OSError: иначе плашка попала бы в запись. Возвращает HWND."""
     win.update_idletasks()
+    if not WIN:
+        if exclude:  # спрятать окно от захвата экрана на Linux нельзя, а значок в записи не нужен
+            win.destroy()
+            raise OSError(t("На Linux значок записи попал бы в видео — он отключён, пауза и стоп есть в OBS и в трее"))
+        return None
     u, hwnd = wc.user32, W.HWND(int(win.wm_frame(), 16))
     if exclude and not u.SetWindowDisplayAffinity(hwnd, 0x11):  # WDA_EXCLUDEFROMCAPTURE
         win.destroy()
@@ -395,6 +416,9 @@ class RenderToast(tk.Toplevel):
         self.hwnd = float_window(self, exclude)
         self.deiconify()
         self.update_idletasks()
+        if not WIN:
+            self.geometry("+{}+{}".format(*wc.corner_pos(wc.primary(), self.winfo_width(), self.winfo_height())))
+            return
         r = W.RECT()
         with wc.physical():  # координаты экранов — в настоящих пикселях
             wc.user32.GetWindowRect(self.hwnd, C.byref(r))
@@ -464,11 +488,11 @@ class LivePreview(tk.Canvas):
         self.click_anim_t = -1e9  # когда последний раз играла анимация клика: после неё наклон возвращается плавно
         self.tilt_deg = 0.0  # сглаженный угол наклона в движении
         self.drawn = None  # что нарисовано в прошлом кадре — то же самое не перерисовываем
-        self.handles = {wc.user32.LoadCursorW(None, cid): n for n, (cid, _) in wc.CURSORS.items()}
+        self.handles = wc.system_shapes()
         self.custom = {}  # свои курсоры программ (инструменты Premiere и т. п.): имя → снимок wc.snapshot
         self.shown, self.morph = None, None  # какой вид курсора показан; смена вида: (прежний, когда началась)
         self.sets, self.sig, self.sig_seen, self.sig_t = {}, None, None, 0
-        self.pt, self.ci = W.POINT(), wc.CURSORINFO(cbSize=C.sizeof(wc.CURSORINFO))
+        self.shape = None  # вид курсора в этом кадре: то, что отдал wc.pointer
         self.after(16, self.tick)
 
     @staticmethod
@@ -529,18 +553,13 @@ class LivePreview(tk.Canvas):
         self.after(16, self.tick)
         if not self.winfo_viewable():
             return
-        u = wc.user32
-        with wc.physical():  # окно масштабирует Windows, а курсор и мониторы — в настоящих пикселях
-            u.GetCursorPos(C.byref(self.pt))
-            self.ci.cbSize = C.sizeof(wc.CURSORINFO)  # Windows 11 обнуляет cbSize после вызова
-            if not u.GetCursorInfo(C.byref(self.ci)):
-                self.ci.hCursor = None
-        mon = next((m for m in self.app.monitors if m["left"] <= self.pt.x < m["left"] + m["width"]
-                    and m["top"] <= self.pt.y < m["top"] + m["height"]), None)
+        px, py, self.shape, down, showing = wc.pointer()  # окно масштабирует Windows, а курсор — в настоящих пикселях
+        mon = next((m for m in self.app.monitors if m["left"] <= px < m["left"] + m["width"]
+                    and m["top"] <= py < m["top"] + m["height"]), None)
         now = time.perf_counter()
         if mon is None:
             return
-        x, y = self.pt.x - mon["left"], self.pt.y - mon["top"]
+        x, y = px - mon["left"], py - mon["top"]
         sm, rc = self.app.cfg["smoothing"], self.app.cfg["render"]
         if mon is not self.mon:  # перешли на другой монитор — без «прилёта»
             self.mon, self.p, self.v, self.anchor, self.d = mon, [x, y], [0.0, 0.0], [x, y], [0.0, 0.0]
@@ -564,7 +583,6 @@ class LivePreview(tk.Canvas):
                     k = sm["stiffness"]
                     self.v[i] += (k * (g - self.p[i]) - 2 * sm["damping_ratio"] * math.sqrt(k) * self.v[i]) * dt
                     self.p[i] += self.v[i] * dt
-        down = u.GetAsyncKeyState(1) < 0
         if down and not self.was_down:
             self.press_t = now
         elif self.was_down and not down:
@@ -594,7 +612,7 @@ class LivePreview(tk.Canvas):
             if i % 3 == 0:
                 tx, ty = round(tx, 1), round(ty, 1)  # пружина подходит к цели бесконечно: без округления кадр «новый»
                 ops.append((tx - 1, ty - 1, tx + 1, ty + 1, MUTE))
-        if self.ci.flags & 1:
+        if showing:
             self.cursor_ops(ops, now, mon, s, steps, down, qx, qy, rc)
         else:
             self.shown = None  # курсор спрятан (печатают текст) — появится сразу нужным видом, как при рендере
@@ -610,10 +628,10 @@ class LivePreview(tk.Canvas):
     def cursor_ops(self, ops, now, mon, s, steps, down, qx, qy, rc):
         """Свечение, «призраки» шлейфа и сам курсор — в список кадра: (x, y, картинка)."""
         ops.append((round(qx + 8 - 36, 1), round(qy + 10 - 36, 1), self.glow))
-        name = self.handles.get(self.ci.hCursor)
+        name = self.handles.get(self.shape)
         if name is None:  # не системный курсор — снимаем один раз на хэндл
-            snap = wc.snapshot(self.ci.hCursor, wc.cursor_base_size() * mon["dpi"] / 96)
-            name = self.handles[self.ci.hCursor] = f"custom{len(self.custom)}" if snap else "arrow"
+            snap = wc.snapshot(self.shape, wc.cursor_base_size() * mon["dpi"] / 96)
+            name = self.handles[self.shape] = f"custom{len(self.custom)}" if snap else "arrow"
             if snap:
                 self.custom[name] = snap
         if name != self.shown:
@@ -1151,9 +1169,8 @@ class App:
         self.build()
         # высота — под самую высокую вкладку, чтобы настройки было видно без прокрутки (но не выше экрана:
         # снизу панель задач, сверху заголовок окна)
-        work = W.RECT()  # рабочая область экрана — без панели задач
-        wc.user32.SystemParametersInfoW(0x30, 0, C.byref(work), 0)  # SPI_GETWORKAREA
-        need, room = self.tallest(), (work.bottom - work.top or sh - 48) - 40  # 40 — заголовок окна и рамка
+        _, work_top, _, work_bottom = wc.work_area()  # рабочая область экрана — без панели задач
+        need, room = self.tallest(), (work_bottom - work_top or sh - 48) - 40  # 40 — заголовок окна и рамка
         if need > room:  # не влезает по высоте — сначала за счёт пустых полей сверху и снизу
             cut = min(need - room, sum(self.pady) - 12)
             top = cut * self.pady[0] // sum(self.pady)
@@ -1162,7 +1179,7 @@ class App:
             need = self.tallest()
         h = min(max(need, min(960, sh - 100)), room)
         root.geometry(f"{min(1460, sw - 40)}x{h}+{max(0, (sw - min(1460, sw - 40)) // 2)}"
-                      f"+{max(work.top, work.top + (room - h) // 2)}")
+                      f"+{max(work_top, work_top + (room - h) // 2)}")
 
         h = logging.Handler()
         h.emit = lambda r: self.post(self.append_log, h.format(r), r.levelno)
@@ -1196,7 +1213,7 @@ class App:
         """Значок у часов: окно, запись, виртуальный монитор, выход."""
         try:
             import pystray
-        except ImportError as e:
+        except Exception as e:  # на Linux ещё и нет ни одного способа показать значок
             return log.warning("%s", e)
         item = pystray.MenuItem
         self.tray = pystray.Icon("SmoothCursor", Image.open(BASE / "assets" / "icon.png"), APP, pystray.Menu(
@@ -1204,7 +1221,7 @@ class App:
             item(lambda i: t("Остановить запись") if self.state == "recording" else t("Начать запись"),
                  lambda: self.post(self.toggle), enabled=lambda i: self.state in ("idle", "recording")),
             item(lambda i: t("Виртуальный монитор"), lambda: self.post(self.toggle_virtual),
-                 checked=lambda i: self.cfg["virtual"]["on"], enabled=lambda i: not self.vd_busy),
+                 checked=lambda i: self.cfg["virtual"]["on"], enabled=lambda i: not self.vd_busy, visible=WIN),
             pystray.Menu.SEPARATOR,
             item(lambda i: t("Выход"), lambda: self.post(self.on_close))))
         self.tray.run_detached()
@@ -1284,7 +1301,7 @@ class App:
             log.info(t("Обновление пропущено. Скачать можно здесь: %s"), updater.PAGE)
 
         def update():
-            if not getattr(sys, "frozen", False):  # запуск из исходников — ставить нечего, открываем страницу
+            if not (WIN and getattr(sys, "frozen", False)):  # из исходников и на Linux — открываем страницу
                 card.destroy()
                 return os.startfile(updater.PAGE)
             card.busy()
@@ -1811,8 +1828,9 @@ class App:
         b = tk.Frame(p, bg=BG)
         b.pack(side="bottom", fill="x", pady=(10, 0))
         Btn(b, t("Рендер"), self.render_selected, kind="primary").pack(side="left")
-        Btn(b, "→  After Effects", self.ae_selected).pack(side="left", padx=(8, 0))
-        Btn(b, "→  Premiere", self.premiere_selected).pack(side="left", padx=(8, 0))
+        if WIN:  # программ Adobe на Linux нет
+            Btn(b, "→  After Effects", self.ae_selected).pack(side="left", padx=(8, 0))
+            Btn(b, "→  Premiere", self.premiere_selected).pack(side="left", padx=(8, 0))
         Btn(b, "▶  " + t("Превью"), self.preview_selected).pack(side="left", padx=(8, 12))
         self.lbl(b, t("с")).pack(side="left")
         self.entry(b, "ui.preview_start", width=4, conv=float)[0].pack(side="left", padx=5, ipady=3)
@@ -2101,6 +2119,8 @@ class App:
         self.picker.grid(row=0, column=0, columnspan=3, sticky="ew")
         self.toggle_row(g, "Выключать захват курсора в источниках сцены", "obs.disable_capture_cursor").grid(
             row=1, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        if not WIN:  # драйвер виртуального экрана есть только для Windows
+            return
         g, h = self.section(r, "Виртуальный монитор")
         self.vd_btn = Btn(h, "", self.toggle_virtual, small=True)
         self.vd_btn.pack(side="right")
@@ -2522,7 +2542,8 @@ class App:
             log.info(t("Папка записей: %s — OBS переключится на неё при подключении"), d)
 
     def choose_ffmpeg(self):
-        f = filedialog.askopenfilename(title="ffmpeg.exe", filetypes=[("ffmpeg", "ffmpeg.exe"), (t("Все"), "*.*")])
+        f = filedialog.askopenfilename(title="ffmpeg" + render.EXE, filetypes=[("ffmpeg", "ffmpeg" + render.EXE),
+                                                                            (t("Все"), "*")])
         if f:
             self.ffmpeg_var.set(f)
             self.redetect_encoder()
@@ -2846,7 +2867,8 @@ def main():
     load_fonts()
     # Окно программы масштабирует сама Windows (GDI scaling): под масштаб монитора и сразу при переносе на другой,
     # текст и линии чёткие. Только для этого потока — запись, рендер и хоткей идут в настоящих пикселях.
-    wc.user32.SetThreadDpiAwarenessContext(C.c_void_p(-5))  # DPI_AWARENESS_CONTEXT_UNAWARE_GDISCALED
+    if WIN:
+        wc.user32.SetThreadDpiAwarenessContext(C.c_void_p(-5))  # DPI_AWARENESS_CONTEXT_UNAWARE_GDISCALED
     root = tk.Tk()
     root.withdraw()  # покажет App, если не запускается в трей
     root.tk.call("tk", "scaling", 96 / 72)  # вёрстка в «пикселях при 100%», дальше растягивает Windows
