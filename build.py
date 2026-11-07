@@ -23,10 +23,11 @@ def run(cmd):
 run([sys.executable, "make_icon.py"])
 ico, png = ROOT / "assets" / "icon.ico", ROOT / "assets" / "icon.png"
 data = lambda src, dst: ["--add-data", f"{src}{os.pathsep}{dst}"]
-tray = ["pystray._win32"] if sys.platform == "win32" else ["pystray._xorg", "pystray._appindicator", "pystray._gtk"]
+hidden = ["pystray._win32"] if sys.platform == "win32" else ["pystray._xorg", "pystray._appindicator", "pystray._gtk",
+                                                               "PIL._tkinter_finder"]
 run(PYI + ["--windowed", "--name", "Smooth Cursor", "--icon", str(ico), "--distpath", str(B / "dist"),
            *data(ROOT / "fonts", "fonts"), *data(ROOT / "assets", "assets"), *data(ROOT / "premiere", "premiere"),
-           *[a for m in tray for a in ("--hidden-import", m)], str(ROOT / "app.pyw")])
+           *[a for m in hidden for a in ("--hidden-import", m)], str(ROOT / "app.pyw")])
 
 app_dir = B / "dist" / "Smooth Cursor"
 if sys.platform != "win32":
