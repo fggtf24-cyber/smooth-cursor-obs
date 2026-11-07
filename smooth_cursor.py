@@ -227,7 +227,8 @@ class Obs:
 
     def _ensure_capture(self, scene, source, d, cursor):
         """Сцена и захват экрана d в ней. На Windows method: 0 — авто, 1 — DXGI, 2 — Windows 10."""
-        kind, props = wc.capture_input(d, cursor, self.req.get_input_kind_list(False).input_kinds)
+        kinds = () if sys.platform == "win32" else self.req.get_input_kind_list(False).input_kinds
+        kind, props = wc.capture_input(d, cursor, kinds)
         if scene not in [s["sceneName"] for s in self.req.get_scene_list().scenes]:
             self.req.create_scene(scene)
         if source in [i["inputName"] for i in self.req.get_input_list().inputs]:

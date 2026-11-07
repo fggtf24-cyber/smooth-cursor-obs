@@ -256,7 +256,10 @@ def encoder_works(ffmpeg, codec):
 
 
 def ffmpeg_major(ffmpeg):
-    """Старшая версия ffmpeg: в дистрибутивах Linux бывает 4 и 6. У ночных сборок вместо номера дата: считаем новыми."""
+    """Старшая версия ffmpeg: в дистрибутивах Linux бывает 4 и 6. У ночных сборок вместо номера дата: считаем новыми.
+    На Windows ffmpeg ставит сама программа, спрашивать незачем."""
+    if sys.platform == "win32":
+        return 99
     if ffmpeg not in _major:
         out = subprocess.run([ffmpeg, "-version"], capture_output=True, text=True, creationflags=CREATE_NO_WINDOW).stdout
         m = re.match(r"ffmpeg version n?(\d+)\.", out)

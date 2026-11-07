@@ -19,6 +19,12 @@ jobs:
       - run: pip install -r requirements.txt pyinstaller jeepney
       - run: python selftest.py
       - run: python build.py
+      - name: Собранная программа запускается
+        run: |
+          $p = Start-Process "build/dist/Smooth Cursor/Smooth Cursor.exe" -PassThru
+          Start-Sleep 15
+          if ($p.HasExited) { throw "программа закрылась с кодом $($p.ExitCode)" }
+          Stop-Process $p
       - uses: actions/upload-artifact@v4
         with:
           name: SmoothCursor-windows

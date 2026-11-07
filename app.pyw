@@ -1,5 +1,10 @@
 """Smooth Cursor — окно программы. Запуск: двойной клик по app.pyw (или python app.pyw)."""
-import autostart
+import sys
+
+if sys.platform == "win32":
+    import autostart
+else:
+    import linuxautostart as autostart
 
 autostart.boot()  # фоновый режим и вторая копия заканчиваются здесь, до тяжёлых импортов
 
@@ -197,8 +202,9 @@ class Slider(tk.Canvas):
         self.bind("<Button-1>", self._drag)
         self.bind("<B1-Motion>", self._drag)
         self.bind("<MouseWheel>", lambda e: self.nudge(1 if e.delta > 0 else -1))
-        self.bind("<Button-4>", lambda e: self.nudge(1))  # колесо на X11 — кнопки 4 и 5
-        self.bind("<Button-5>", lambda e: self.nudge(-1))
+        if not WIN:  # колесо на X11 — кнопки 4 и 5
+            self.bind("<Button-4>", lambda e: self.nudge(1))
+            self.bind("<Button-5>", lambda e: self.nudge(-1))
         self.bind("<Left>", lambda e: self.nudge(-1))
         self.bind("<Right>", lambda e: self.nudge(1))
 
@@ -1162,7 +1168,7 @@ class App:
         root.minsize(min(1400, sw - 60), min(900, sh - 120))
         if WIN and (BASE / "assets" / "icon.ico").exists():
             root.iconbitmap(default=str(BASE / "assets" / "icon.ico"))
-        elif (BASE / "assets" / "icon.png").exists():  # X11 понимает только картинку, .ico — нет
+        elif not WIN and (BASE / "assets" / "icon.png").exists():  # X11 понимает только картинку, .ico — нет
             root.iconphoto(True, tk.PhotoImage(file=str(BASE / "assets" / "icon.png")))
         root.configure(bg=BG)
         root.option_add("*Font", F["body"])
@@ -1395,8 +1401,10 @@ class App:
         self.holder = tk.Frame(sc, bg=BG)
         self.holder_win = sc.create_window(0, 0, anchor="nw", window=self.holder)
         sc.bind("<Configure>", lambda e: self.fit_page())
-        for wheel in ("<MouseWheel>", "<Button-4>", "<Button-5>"):  # колесо на X11 — кнопки 4 и 5
-            self.root.bind_all(wheel, self.wheel)
+        self.root.bind_all("<MouseWheel>", self.wheel)
+        if not WIN:  # колесо на X11 — кнопки 4 и 5
+            self.root.bind_all("<Button-4>", self.wheel)
+            self.root.bind_all("<Button-5>", self.wheel)
         self.root.bind_all("<Control-KeyPress>", edit_keys)
         self.root.bind_all("<Button-1>", click_focus)
         self.page_frame = page = tk.Frame(self.holder, bg=BG)  # «паспарту»: всё вписано в невидимую рамку с полями
