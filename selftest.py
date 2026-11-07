@@ -173,7 +173,8 @@ def check_render():
             if codec == codecs[0]:  # превью с 1.0 с: кадры совпадают с полным рендером, включая уход в 1.5 с
                 prev = render.render(video, tmp / "src.cursor.json", cfg, progress=lambda pct: False, clip=(1.0, 0.7))
                 for k in range(12, 19):
-                    assert np.abs(crop(prev, k) - crop(out, 30 + k)).max() < 20, (
+                    # сдвиг на кадр даёт 125 там, где курсор уезжает; шум кодировщика — до 25 у x264 в ffmpeg 9
+                    assert np.abs(crop(prev, k) - crop(out, 30 + k)).max() < 60, (
                         "превью сдвинуто во времени", k, [int(np.abs(crop(prev, k) - crop(out, 30 + k + d)).max())
                                                           for d in (-2, -1, 0, 1, 2)])
                 prev.unlink()
@@ -385,7 +386,10 @@ def check_morph():
         canvas[0].paste(a.getchannel("A"), (round(80 - ax), round(80 - ay)))
         canvas[1].paste(b.getchannel("A"), (round(80 - bx), round(80 - by)))
         ma, mb = (np.array(c) > 128 for c in canvas)
-        assert (ma & mb).sum() / (ma | mb).sum() > 0.9, ("наклон смены вида: не совпал с обычным", deg)
+        # точка вставки округлена до пикселя, а тонкому курсору из темы Linux сдвиг на пиксель заметен
+        iou = max((np.roll(ma, (dy, dx), (0, 1)) & mb).sum() / (np.roll(ma, (dy, dx), (0, 1)) | mb).sum()
+                  for dy in (-1, 0, 1) for dx in (-1, 0, 1))
+        assert iou > 0.9, ("наклон смены вида: не совпал с обычным", deg, round(float(iou), 3))
     for p, like in ((0.05, old), (0.95, new)):
         img, (hx, hy) = render.morph_sprite(*old, *new, p)
         a = np.array(img.getchannel("A")) > 128
