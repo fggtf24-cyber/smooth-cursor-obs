@@ -47,8 +47,9 @@ def check_x11():
     wait(lambda: logger.samples and logger.samples[-1][1:3] == (100, 200), "положение курсора в логе")
     xdotool("mousemove", 300, 150, "mousedown", 1)
     wait(lambda: any(c[1:3] == ("L", 1) for c in logger.clicks), "нажатие левой кнопки")
-    xdotool("mouseup", 1, "click", 3)
+    xdotool("mouseup", 1, "mousedown", 3)  # не click: он быстрее шага опроса, живой палец так не нажимает
     wait(lambda: any(c[1:3] == ("R", 1) for c in logger.clicks), "нажатие правой кнопки")
+    xdotool("mouseup", 3)
     time.sleep(0.2)
     logger.stop()
     rate = len(logger.samples) / ((logger.samples[-1][0] - logger.samples[0][0]) / 1e9)
