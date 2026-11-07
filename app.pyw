@@ -197,6 +197,8 @@ class Slider(tk.Canvas):
         self.bind("<Button-1>", self._drag)
         self.bind("<B1-Motion>", self._drag)
         self.bind("<MouseWheel>", lambda e: self.nudge(1 if e.delta > 0 else -1))
+        self.bind("<Button-4>", lambda e: self.nudge(1))  # колесо на X11 — кнопки 4 и 5
+        self.bind("<Button-5>", lambda e: self.nudge(-1))
         self.bind("<Left>", lambda e: self.nudge(-1))
         self.bind("<Right>", lambda e: self.nudge(1))
 
@@ -1161,8 +1163,10 @@ class App:
         self.padx, self.pady = max(16, min(110, (sw - 1300) // 2)), (46, 34) if sh >= 1000 else (12, 12)
         root.geometry(f"{min(1460, sw - 40)}x{min(960, sh - 100)}")
         root.minsize(min(1400, sw - 60), min(900, sh - 120))
-        if (BASE / "assets" / "icon.ico").exists():
+        if WIN and (BASE / "assets" / "icon.ico").exists():
             root.iconbitmap(default=str(BASE / "assets" / "icon.ico"))
+        elif (BASE / "assets" / "icon.png").exists():  # X11 понимает только картинку, .ico — нет
+            root.iconphoto(True, tk.PhotoImage(file=str(BASE / "assets" / "icon.png")))
         root.configure(bg=BG)
         root.option_add("*Font", F["body"])
         self.style()
@@ -1392,7 +1396,8 @@ class App:
         self.holder = tk.Frame(sc, bg=BG)
         self.holder_win = sc.create_window(0, 0, anchor="nw", window=self.holder)
         sc.bind("<Configure>", lambda e: self.fit_page())
-        self.root.bind_all("<MouseWheel>", self.wheel)
+        for wheel in ("<MouseWheel>", "<Button-4>", "<Button-5>"):  # колесо на X11 — кнопки 4 и 5
+            self.root.bind_all(wheel, self.wheel)
         self.root.bind_all("<Control-KeyPress>", edit_keys)
         self.root.bind_all("<Button-1>", click_focus)
         self.page_frame = page = tk.Frame(self.holder, bg=BG)  # «паспарту»: всё вписано в невидимую рамку с полями
@@ -1538,7 +1543,7 @@ class App:
         w, ob = e.widget, self.onboarding
         if (self.scrollbar.winfo_ismapped() and isinstance(w, tk.Misc) and w.winfo_toplevel() is self.root
                 and not isinstance(w, (Slider, tk.Text, ttk.Treeview)) and not (ob and ob.winfo_exists())):
-            self.scroller.yview_scroll(-1 if e.delta > 0 else 1, "units")
+            self.scroller.yview_scroll(-1 if e.delta > 0 or e.num == 4 else 1, "units")
 
     def lang_switch(self, parent):
         f = tk.Frame(parent, bg=parent["bg"])
