@@ -24,8 +24,8 @@ EN = {
     "Для курсора выбран экран %dx%d, а OBS снимает %dx%d — выберите тот же экран":
         "The cursor stream uses a %dx%d screen but OBS captures %dx%d — choose the same screen",
     "Поток экрана прервался: %s": "The screen stream stopped: %s",
-    "На Linux значок записи попал бы в видео — он отключён, пауза и стоп есть в OBS и в трее":
-        "On Linux the recording badge would end up in the video, so it is off: pause and stop are in OBS and the tray",
+    "На этом рабочем столе нет трея: крестик закрывает программу":
+        "This desktop has no system tray: the close button quits the app",
     "Поставьте ffmpeg из репозитория своего дистрибутива, например: sudo apt install ffmpeg":
         "Install ffmpeg from your distribution, for example: sudo apt install ffmpeg",
     # --- запись и OBS ---

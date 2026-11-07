@@ -89,6 +89,8 @@ def x11():
         x.XQueryPointer.argtypes = [v, u, C.POINTER(u), C.POINTER(u), i, i, i, i, C.POINTER(C.c_uint)]
         x.XGetAtomName.argtypes, x.XGetAtomName.restype = [v, u], v
         x.XFree.argtypes = [v]
+        x.XInternAtom.argtypes, x.XInternAtom.restype = [v, C.c_char_p, C.c_int], u
+        x.XGetSelectionOwner.argtypes, x.XGetSelectionOwner.restype = [v, u], u
         x.XKeysymToKeycode.argtypes, x.XKeysymToKeycode.restype = [v, u], C.c_ubyte
         x.XGrabKey.argtypes = [v, C.c_int, C.c_uint, u, C.c_int, C.c_int, C.c_int]
         x.XUngrabKey.argtypes = [v, C.c_int, C.c_uint, u]
@@ -198,6 +200,15 @@ def find_display(select="auto", obs_ids=()):
 
 def find_window(part):
     return None
+
+
+def has_tray():
+    """Есть ли у рабочего стола трей: значок pystray встаёт в него через X11."""
+    x, dpy = x11()[0], open_display()
+    try:
+        return bool(x.XGetSelectionOwner(dpy, x.XInternAtom(dpy, b"_NET_SYSTEM_TRAY_S0", 0)))
+    finally:
+        x.XCloseDisplay(dpy)
 
 
 def work_area():

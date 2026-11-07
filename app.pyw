@@ -278,10 +278,7 @@ def float_window(win, exclude=True):
     фокус. Где Windows прятать не умеет — OSError: иначе плашка попала бы в запись. Возвращает HWND."""
     win.update_idletasks()
     if not WIN:
-        if exclude:  # спрятать окно от захвата экрана на Linux нельзя, а значок в записи не нужен
-            win.destroy()
-            raise OSError(t("На Linux значок записи попал бы в видео — он отключён, пауза и стоп есть в OBS и в трее"))
-        return None
+        return None  # только плашка рендера: значка записи на Linux нет, от захвата экрана его не спрятать
     u, hwnd = wc.user32, W.HWND(int(win.wm_frame(), 16))
     if exclude and not u.SetWindowDisplayAffinity(hwnd, 0x11):  # WDA_EXCLUDEFROMCAPTURE
         win.destroy()
@@ -1215,6 +1212,8 @@ class App:
 
     def start_tray(self):
         """Значок у часов: окно, запись, виртуальный монитор, выход."""
+        if not WIN and not wc.has_tray():  # иначе закрытое окно спряталось бы туда, откуда его не достать
+            return log.info(t("На этом рабочем столе нет трея: крестик закрывает программу"))
         try:
             import pystray
         except Exception as e:  # на Linux ещё и нет ни одного способа показать значок
@@ -1458,11 +1457,13 @@ class App:
         self.time_lbl.pack(side="left", padx=(6, 0))
         self.toggle_row(left, t("Рендерить сразу после записи"), "ui.auto_render").pack(anchor="w", pady=(14, 0))
         ov = self.toggle_row(left, t("Значок записи в углу экрана"), "ui.rec_overlay", self.sync_overlay)
-        ov.pack(anchor="w", pady=(6, 0))
+        if WIN:  # на Linux значок попал бы в видео, а курсор в кадр не впекается
+            ov.pack(anchor="w", pady=(6, 0))
         self.hint_on((ov, *ov.winfo_children()), "Значок записи",
                      "в углу экрана: идёт ли запись, пауза и стоп; перетаскивается мышью. На видео его нет.")
         ck = self.toggle_row(left, t("Проверять перед записью, что курсора нет в кадре"), "obs.check_cursor")
-        ck.pack(anchor="w", pady=(6, 0))
+        if WIN:
+            ck.pack(anchor="w", pady=(6, 0))
         self.hint_on((ck, *ck.winfo_children()), "Проверка курсора",
                      "не попал ли курсор в кадр OBS (бывает на 4K); если да — захват на «Windows 10». Один раз на экран.")
         now = tk.Frame(left, bg=BG)
@@ -2481,7 +2482,8 @@ class App:
 
     def sync_overlay(self):
         """Значок записи в углу записываемого экрана: есть, пока идёт запись и он включён."""
-        want = self.cfg["ui"]["rec_overlay"] and self.state == "recording" and self.recorder and self.recorder.recording
+        want = WIN and self.cfg["ui"]["rec_overlay"] and self.state == "recording" and self.recorder \
+            and self.recorder.recording
         if want and not (self.overlay and self.overlay.winfo_exists()):
             try:
                 self.overlay = RecOverlay(self.root, self.recorder.display, self.toggle_pause, self.toggle,

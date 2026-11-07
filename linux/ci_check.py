@@ -75,6 +75,7 @@ def check_x11():
     x, y, shape, down, showing = lc.pointer()
     assert (x, y) == (300, 150) and showing and not down, (x, y, showing, down)
     assert lc.cursor_sprite("arrow", 32)[0].width > 0
+    assert not lc.has_tray(), "у Xvfb трея нет"
     print("x11: ок")
 
 
