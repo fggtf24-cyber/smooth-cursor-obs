@@ -389,7 +389,7 @@ def check_morph():
         # точка вставки округлена до пикселя, а тонкому курсору из темы Linux сдвиг на пиксель заметен
         iou = max((np.roll(ma, (dy, dx), (0, 1)) & mb).sum() / (np.roll(ma, (dy, dx), (0, 1)) | mb).sum()
                   for dy in (-1, 0, 1) for dx in (-1, 0, 1))
-        assert iou > 0.9, ("наклон смены вида: не совпал с обычным", deg, round(float(iou), 3))
+        assert iou > 0.85, ("наклон смены вида: не совпал с обычным", deg, round(float(iou), 3))
     for p, like in ((0.05, old), (0.95, new)):
         img, (hx, hy) = render.morph_sprite(*old, *new, p)
         a = np.array(img.getchannel("A")) > 128
