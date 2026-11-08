@@ -760,6 +760,11 @@ def check_linux_cursor():
     assert (lc.KEYS["f1"], lc.KEYS["f10"], lc.KEYS["a"], lc.KEYS["m"], lc.KEYS["1"]) == (59, 68, 30, 50, 2)
     ev = lc.EVENT.pack(0, 0, 1, 67, 1) + lc.EVENT.pack(0, 0, 2, 0, 5) + lc.EVENT.pack(0, 0, 1, 67, 2) + lc.EVENT.pack(0, 0, 1, 67, 0)
     assert lc.key_events(ev + b"xx") == [(67, 1), (67, 0)], "автоповтор и обрывок чтения не считаем"
+    import linuxautostart as la
+    assert la.desktop_exec(["/home/u/.local/share/smooth-cursor/Smooth Cursor", "--watch"]) == \
+        '"/home/u/.local/share/smooth-cursor/Smooth Cursor" --watch'
+    assert la.desktop_exec(["/opt/a$b", "100%"]) == r'"/opt/a\\$b" 100%%', la.desktop_exec(["/opt/a$b", "100%"])
+    assert la.desktop_exec(['/x/"q"\\y']) == r'"/x/\\"q\\"\\\\y"', la.desktop_exec(['/x/"q"\\y'])
 
     mons = [{"id": "0", "width": 1920, "height": 1080, "left": 0, "top": 0, "primary": True},
             {"id": "1", "width": 2560, "height": 1440, "left": 1920, "top": 0}]

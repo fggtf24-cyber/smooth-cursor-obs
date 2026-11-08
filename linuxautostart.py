@@ -2,7 +2,6 @@
 сеанс и не должен тянуть numpy и окно. Логика как в win32autostart: --watch следит за OBS и запускает программу."""
 import contextlib
 import os
-import shlex
 import socket
 import subprocess
 import sys
@@ -39,6 +38,20 @@ def command(*args):
     if getattr(sys, "frozen", False):
         return [sys.executable, *args]
     return [sys.executable, str(Path(__file__).with_name("app.pyw")), *args]
+
+
+RESERVED = set(" \t\n\"'\\><~|&;$*?#()`")
+
+
+def desktop_exec(args):
+    """Строка Exec файла .desktop по стандарту: аргумент со спецсимволами (путь «Smooth Cursor» — с пробелом) — в двойных
+    кавычках, внутри \\ \" ` $ экранированы, затем все \\ удвоены как в любой строке файла; % — %%."""
+    def one(a):
+        a = a.replace("%", "%%")
+        if not RESERVED & set(a):
+            return a
+        return '"' + "".join("\\" + c if c in '"`$\\' else c for c in a).replace("\\", "\\\\") + '"'
+    return " ".join(map(one, args))
 
 
 def signal(name):
@@ -95,7 +108,7 @@ def sync(on):
     if on:
         AUTOSTART.parent.mkdir(parents=True, exist_ok=True)
         AUTOSTART.write_text("[Desktop Entry]\nType=Application\nName=Smooth Cursor\nNoDisplay=true\n"
-                             f"Exec={shlex.join(command('--watch'))}\n", encoding="utf-8")
+                             f"Exec={desktop_exec(command('--watch'))}\n", encoding="utf-8")
         subprocess.Popen(command("--watch"))  # уже запущен — новый сразу выйдет
     else:
         AUTOSTART.unlink(missing_ok=True)

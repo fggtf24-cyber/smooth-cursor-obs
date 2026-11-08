@@ -62,6 +62,11 @@ def check_x11():
     hk = lc.HotkeyThread("ctrl+F9", lambda: hits.append(1)).start()
     xdotool("key", "ctrl+F9")
     wait(lambda: hits, "глобальный хоткей")
+    xdotool("keydown", "ctrl+F9")  # держат дольше задержки автоповтора: запись должна переключиться один раз
+    time.sleep(1.5)
+    xdotool("keyup", "ctrl+F9")
+    time.sleep(0.3)
+    assert len(hits) == 2, ("удержание хоткея сработало несколько раз", len(hits))
     busy = lc.HotkeyThread("ctrl+F9", lambda: None)  # занято этой же программой, X11 откажет второму клиенту
     try:
         busy.start()

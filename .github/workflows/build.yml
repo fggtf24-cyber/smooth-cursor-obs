@@ -3,6 +3,8 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+  release:
+    types: [published]
 permissions:
   contents: read
 env:
@@ -33,6 +35,8 @@ jobs:
   linux:
     # старая Ubuntu: собранное на ней запускается и на новых дистрибутивах, наоборот — нет
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write  # приложить сборку к релизу
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -72,6 +76,11 @@ jobs:
             kill $pid'
           cat built.log
           ! grep -q Traceback built.log
+      - name: Сборка для Linux — в релиз (установщик для Windows кладётся при выпуске)
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" release/SmoothCursor-linux-x86_64.tar.gz --clobber
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -95,6 +95,7 @@ def x11():
         x.XGrabKey.argtypes = [v, C.c_int, C.c_uint, u, C.c_int, C.c_int, C.c_int]
         x.XUngrabKey.argtypes = [v, C.c_int, C.c_uint, u]
         x.XSync.argtypes = [v, C.c_int]
+        x.XkbSetDetectableAutoRepeat.argtypes = [v, C.c_int, C.c_void_p]
         x.XPending.argtypes = [v]
         x.XNextEvent.argtypes = [v, C.POINTER(XKeyEvent)]
         xf.XFixesGetCursorImage.argtypes = [v]
@@ -345,6 +346,8 @@ class HotkeyThread(threading.Thread):
         x = x11()[0]
         dpy = open_display()
         root = x.XDefaultRootWindow(dpy)
+        # удержание клавиши: X11 повторяет только нажатия, без отпусканий — так их можно отличить от новых нажатий
+        x.XkbSetDetectableAutoRepeat(dpy, 1, None)
         sym = 0xFFBD + int(self.key[1:]) if len(self.key) > 1 else ord(self.key)  # XK_F1 = 0xFFBE
         code = x.XKeysymToKeycode(dpy, sym)
         mask = sum(self.MASKS[m] for m in self.mods)
@@ -355,12 +358,15 @@ class HotkeyThread(threading.Thread):
         if _x_errors:
             self.error = t("хоткей {} уже занят другой программой").format(self.hotkey)
         self._ready.set()
-        ev = XKeyEvent()
+        ev, held = XKeyEvent(), False
         while not self.error and not self._stop_it.wait(0.02):
             while x.XPending(dpy):
                 x.XNextEvent(dpy, C.byref(ev))
-                if ev.type == 2:  # KeyPress
+                if ev.type == 2 and not held:  # KeyPress; пока держат — это автоповтор, как MOD_NOREPEAT на Windows
+                    held = True
                     self.callback()
+                elif ev.type == 3:  # KeyRelease
+                    held = False
         for lock in self.LOCKS:
             x.XUngrabKey(dpy, code, mask | lock, root)
         x.XCloseDisplay(dpy)
