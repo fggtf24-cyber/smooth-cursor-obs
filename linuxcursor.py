@@ -322,7 +322,7 @@ class HotkeyThread(threading.Thread):
     MASKS = {"shift": 1, "ctrl": 4, "alt": 8, "win": 0x40}
     LOCKS = (0, 2, 0x10, 0x12)  # Caps Lock, Num Lock: иначе с ними хоткей не сработает
 
-    def __init__(self, hotkey, callback):
+    def __init__(self, hotkey, callback, needed=None):  # needed — только для Windows
         super().__init__(daemon=True)
         self.hotkey, (self.mods, self.key) = hotkey, parse_hotkey(hotkey)
         self.callback, self.error = callback, None

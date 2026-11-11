@@ -1266,6 +1266,10 @@ class App:
             else:
                 self.conn_fails = 0
 
+    def hotkey_needed(self):
+        """Из потока хоткея: свой OBS закрыт — клавиша не нужна, пусть достаётся другим программам. Чужой OBS не видно."""
+        return self.cfg["obs"]["host"] not in ("localhost", "127.0.0.1", "::1") or bool(autostart.obs_running())
+
     def _obs_gone(self):
         """Закрыть соединения сразу: OBS не завершается, пока они открыты, а запущенный рядом с таким OBS новый остаётся
         без браузерного движка и не закрывается вовсе."""
@@ -2524,7 +2528,7 @@ class App:
         if old:
             old.stop()
         try:
-            self.hotkey = HotkeyThread(new, lambda: self.post(self.toggle)).start()
+            self.hotkey = HotkeyThread(new, lambda: self.post(self.toggle), self.hotkey_needed).start()
             log.info(t("Горячая клавиша: %s"), new)
             if new != self.cfg["hotkey"]:
                 self.cfg["hotkey"] = new
@@ -2535,7 +2539,7 @@ class App:
             if not initial:
                 messagebox.showerror(APP, str(e).capitalize())
             if old:
-                self.hotkey = HotkeyThread(old.hotkey, lambda: self.post(self.toggle)).start()
+                self.hotkey = HotkeyThread(old.hotkey, lambda: self.post(self.toggle), self.hotkey_needed).start()
         self.set_state(self.state)
 
     # ---------- записи и рендер ----------

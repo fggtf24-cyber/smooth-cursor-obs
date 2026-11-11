@@ -447,6 +447,40 @@ def check_autostart():
     print("запуск с OBS: ок")
 
 
+def check_hotkey_released():
+    """Хоткей занят, только пока needed(): без OBS клавиша достаётся другим программам (F9 в After Effects)."""
+    import time
+
+    import platform_cursor as wc
+    from smooth_cursor import HotkeyThread, parse_hotkey
+    key = "ctrl+alt+shift+F11"
+    mods, vk = parse_hotkey(key)
+
+    def free():
+        ok = wc.user32.RegisterHotKey(None, 7, mods, vk)
+        if ok:
+            wc.user32.UnregisterHotKey(None, 7)
+        return bool(ok)
+
+    need = [False]
+    hk = HotkeyThread(key, lambda: None, lambda: need[0]).start()  # занятую клавишу видно и без OBS
+    try:
+        time.sleep(0.3)
+        assert free(), "без OBS клавиша не отпущена"
+        need[0] = True
+        time.sleep(2.5)
+        assert not free(), "OBS открыт, а клавиша не занята"
+        hk.needed = lambda: 1 / 0  # ошибка в needed() — поток живёт, клавиша остаётся
+        time.sleep(2.5)
+        assert hk.is_alive() and not free(), "ошибка в needed() убила хоткей"
+        hk.needed = lambda: False
+        time.sleep(2.5)
+        assert free(), "OBS закрыли, а клавиша не отпущена"
+    finally:
+        hk.stop()
+    assert not hk.is_alive()
+
+
 def check_obs_buttons():
     """Кнопки записи в самом OBS: программа узнаёт о них; свои старт и стоп за чужие не принимает."""
     from types import SimpleNamespace as NS
@@ -813,6 +847,7 @@ if __name__ == "__main__":
     check_old_ffmpeg()
     if sys.platform == "win32":
         check_autostart()
+        check_hotkey_released()
         check_virtual_mode()
         check_custom_cursor()
     check_obs_buttons()

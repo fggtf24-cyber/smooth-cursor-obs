@@ -408,10 +408,11 @@ def parse_hotkey(s):
 class HotkeyThread(threading.Thread):
     """Глобальный хоткей: RegisterHotKey в своём потоке со своим циклом сообщений; callback — из этого потока."""
 
-    def __init__(self, hotkey, callback):
+    def __init__(self, hotkey, callback, needed=lambda: True):
+        """needed() раз в 2 с: False — клавиша отпущена другим программам (F9 в After Effects, пока OBS закрыт)."""
         super().__init__(daemon=True)
         self.hotkey, self.mods, self.vk = hotkey, *parse_hotkey(hotkey)
-        self.callback, self.tid, self.error = callback, None, None
+        self.callback, self.needed, self.tid, self.error = callback, needed, None, None
         self._ready = threading.Event()
 
     def start(self):
@@ -428,13 +429,14 @@ class HotkeyThread(threading.Thread):
             self._ready.set()
             return
         self._ready.set()
-        # Без OBS клавиша не нужна: отпускаем её другим программам (F9 в After Effects), раз в 2 с проверяем OBS.
-        import autostart
         on = True
 
         def follow_obs():
             nonlocal on
-            want = bool(autostart.obs_running())
+            try:
+                want = bool(self.needed())
+            except Exception:  # поток хоткея не должен умереть: тогда клавиша не работала бы до перезапуска
+                want = True
             if want and not on:
                 on = bool(wc.user32.RegisterHotKey(None, 1, self.mods, self.vk))
             elif on and not want:
@@ -442,13 +444,14 @@ class HotkeyThread(threading.Thread):
                 on = False
 
         follow_obs()
-        wc.user32.SetTimer(None, 0, 2000, None)  # WM_TIMER в очередь этого потока
+        timer = wc.user32.SetTimer(None, 0, 2000, None)  # WM_TIMER в очередь этого потока
         msg = W.MSG()
         while wc.user32.GetMessageW(C.byref(msg), None, 0, 0) > 0:
             if msg.message == 0x0312:  # WM_HOTKEY
                 self.callback()
             elif msg.message == 0x0113:  # WM_TIMER
                 follow_obs()
+        wc.user32.KillTimer(None, timer)
         wc.user32.UnregisterHotKey(None, 1)
 
     def stop(self):
