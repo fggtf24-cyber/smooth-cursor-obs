@@ -428,10 +428,27 @@ class HotkeyThread(threading.Thread):
             self._ready.set()
             return
         self._ready.set()
+        # Без OBS клавиша не нужна: отпускаем её другим программам (F9 в After Effects), раз в 2 с проверяем OBS.
+        import autostart
+        on = True
+
+        def follow_obs():
+            nonlocal on
+            want = bool(autostart.obs_running())
+            if want and not on:
+                on = bool(wc.user32.RegisterHotKey(None, 1, self.mods, self.vk))
+            elif on and not want:
+                wc.user32.UnregisterHotKey(None, 1)
+                on = False
+
+        follow_obs()
+        wc.user32.SetTimer(None, 0, 2000, None)  # WM_TIMER в очередь этого потока
         msg = W.MSG()
         while wc.user32.GetMessageW(C.byref(msg), None, 0, 0) > 0:
             if msg.message == 0x0312:  # WM_HOTKEY
                 self.callback()
+            elif msg.message == 0x0113:  # WM_TIMER
+                follow_obs()
         wc.user32.UnregisterHotKey(None, 1)
 
     def stop(self):
