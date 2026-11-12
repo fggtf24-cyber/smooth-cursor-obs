@@ -5,6 +5,7 @@ import io
 import re
 import threading
 import time
+from pathlib import Path
 
 from PIL import Image
 
@@ -55,6 +56,43 @@ def custom_sprite(c, size):
     k = size / c["ref"]
     w, h = max(1, round(img.width * k)), max(1, round(img.height * k))
     return img.resize((w, h), Image.LANCZOS), (c["hot"][0] * w / img.width, c["hot"][1] * h / img.height)
+
+
+# Свой набор курсоров: вид → регулярка по имени файла, как их называют паки курсоров для Windows
+PACK_NAMES = {
+    "help": r"help", "busy": r"work|appstart|background", "wait": r"busy|wait", "cross": r"cross|precision",
+    "ibeam": r"beam|text", "no": r"unavail|nodrop|forbid| no ", "size_ns": r" ns |vert", "size_we": r" ew | we |horiz|horz",
+    "size_nwse": r"nwse|di?a?go?n?a?l? ?1", "size_nesw": r"nesw|di?a?go?n?a?l? ?2", "size_all": r"move",
+    "hand": r"link|hand(?!writ)",
+}
+
+
+def pack_files(path):
+    """Набор для рендера из выбранного файла: он — стрелка, остальные виды — файлы .cur/.ani рядом, по имени.
+    {вид: путь}; файла нет — {} (рендер возьмёт системные)."""
+    p = Path(path)
+    if not p.is_file():
+        return {}
+    out = {"arrow": str(p)}
+    for f in sorted(p.parent.iterdir()):
+        if f == p or f.suffix.lower() not in (".cur", ".ani"):
+            continue
+        stem = " " + re.sub(r"[^a-z0-9]+", " ", f.stem.lower()) + " "
+        name = next((n for n, rx in PACK_NAMES.items() if re.search(rx, stem)), None)
+        if name and name not in out:
+            out[name] = str(f)
+    return out
+
+
+def cur_sprite(path, size):
+    """Файл .cur без Windows (Pillow, .ani не умеет): самая крупная картинка в масштабе size и её hotspot."""
+    data = Path(path).read_bytes()
+    img = Image.open(path).convert("RGBA")  # Pillow берёт самую крупную картинку
+    ents = [data[6 + 16 * i:22 + 16 * i] for i in range(int.from_bytes(data[4:6], "little"))]
+    e = next(e for e in ents if (e[0] or 256) == img.width)
+    k = size / img.width
+    w, h = max(1, round(img.width * k)), max(1, round(img.height * k))
+    return img.resize((w, h), Image.LANCZOS), (int.from_bytes(e[4:6], "little") * k, int.from_bytes(e[6:8], "little") * k)
 
 
 def pack_snapshot(sprite, ref):

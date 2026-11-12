@@ -132,6 +132,25 @@ def morph_steps(kind, vis, fps, ms):
     return step, prev
 
 
+def hold_types(kind, vis, ms, fps):
+    """Вид курсора, мелькнувший короче ms (пролетели кнопку), не показываем: остаётся прежний. После скрытого курсора
+    и в конце видео — как есть."""
+    out, kind = np.asarray(kind).copy(), np.asarray(kind)
+    need, cur, i = ms * fps / 1000, None, 0
+    while i < len(out):
+        j = i + 1
+        while j < len(out) and vis[j] == vis[i] and kind[j] == kind[i]:
+            j += 1
+        if not vis[i]:
+            cur = None
+        elif cur is not None and kind[i] != cur and j - i < need and j < len(out):
+            out[i:j] = cur
+        else:
+            cur = kind[i]
+        i = j
+    return out
+
+
 def tilt_angle(v, right_deg, left_deg, since_click_ms=np.inf):
     """Угол наклона в движении, ° (плюс — против часовой), по скорости v (ширин кадра в секунду по горизонтали, плюс —
     вправо). В покое курсор как в системе; на ходу поворачивается от этого положения в сторону движения: вправо — на
@@ -330,12 +349,12 @@ def make_sprites(work, types, poses, size, rc, custom=None, morphs=()):
 
     def big_of(t):  # поворот и масштаб с 4× запасом и уменьшение — без мыла и лесенки
         if t not in big:
-            big[t] = wc.cursor_sprite(t, size * 4, custom)
+            big[t] = wc.cursor_sprite(t, size * 4, custom, rc["cursor_theme"], rc["app_cursor_scale"])
         return big[t]
 
     def pose(t, lvl, k):
         if not lvl and not k:
-            return wc.cursor_sprite(t, size, custom)
+            return wc.cursor_sprite(t, size, custom, rc["cursor_theme"], rc["app_cursor_scale"])
         return pose_sprite(*big_of(t), rc, lvl, k)
 
     mains = {p: pose(*p) for p in sorted({(t, 0, 0) for t in types} | set(poses))}
@@ -352,7 +371,7 @@ def make_sprites(work, types, poses, size, rc, custom=None, morphs=()):
     slots += [(f"m{m}_{a}_{b}{tilt_tag(k)}", *morph_sprite(*big_of(a), *big_of(b), m / MORPH_STEPS, rc["morph_bounce"],
                                                             deg=k * TILT_STEP_DEG)) for a, b, m, k in sorted(morphs)]
     if rc["debug_raw"]:
-        img, hot = mains.get(("arrow", 0, 0)) or wc.cursor_sprite("arrow", size)
+        img, hot = mains.get(("arrow", 0, 0)) or wc.cursor_sprite("arrow", size, theme=rc["cursor_theme"])
         a = np.array(img, float)
         a[..., :3] = a[..., :3] * 0.3 + np.array([255, 30, 60]) * 0.7  # красный
         a[..., 3] *= 0.6
@@ -568,6 +587,7 @@ def cursor_track(lg, info, cfg, ghost_ms=()):
     v = np.gradient(track["vx"]) * fps / info["w"] if len(vis) > 1 else np.zeros(len(vis))
     # там, где курсор появляется или пропадает, разница позиций — скачок, а не скорость
     ok = vis & np.r_[vis[1:], True] & np.r_[True, vis[:-1]]
+    track["type"] = hold_types(track["type"], vis, rc["morph_min_ms"] if rc["morph_hold"] else 0, fps)
     track["morph"], track["prev"] = morph_steps(track["type"], vis, fps, rc["morph_ms"]) if rc["morph_animation"]         else (np.zeros(len(vis), int), track["type"])
     # смена вида курсора наклон не трогает: спрайты перехода наклоняются как обычные
     track["tilt_deg"] = np.where(vis, frame_tilt(v, ok, track["level"], fps, rc["motion_tilt_right_deg"],

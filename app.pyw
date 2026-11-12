@@ -131,9 +131,9 @@ class Btn(tk.Canvas):
     """Кнопка-прямоугольник: primary — чёрная, outline — контур, seg — ячейка (выбранная — чёрная)."""
 
     def __init__(self, parent, text, command=None, kind="outline", small=False, big=False):
-        self.f = F["btn_b"] if big else F["small"] if small else F["btn"]
+        self.f = F["btn_xl"] if big else F["small"] if small else F["btn"]
         self.kind, self.command, self.enabled, self.selected, self.hover = kind, command, True, False, False
-        self.padx, self.h = (28, 48) if big else (12, 26) if small else (16, 32)
+        self.padx, self.h = (34, 58) if big else (12, 26) if small else (16, 32)
         super().__init__(parent, height=self.h, bg=parent["bg"], highlightthickness=0, bd=0, cursor="hand2")
         self.bind("<Enter>", lambda e: self._hover(True))
         self.bind("<Leave>", lambda e: self._hover(False))
@@ -493,11 +493,14 @@ class LivePreview(tk.Canvas):
         self.click_anim_t = -1e9  # когда последний раз играла анимация клика: после неё наклон возвращается плавно
         self.tilt_deg = 0.0  # сглаженный угол наклона в движении
         self.drawn = None  # что нарисовано в прошлом кадре — то же самое не перерисовываем
+        self.drawn_r, self.drawn_i, self.rect_items, self.img_items = [], [], [], []  # его квадраты и картинки на холсте
         self.handles = wc.system_shapes()
         self.custom = {}  # свои курсоры программ (инструменты Premiere и т. п.): имя → снимок wc.snapshot
         self.shown, self.morph = None, None  # какой вид курсора показан; смена вида: (прежний, когда началась)
+        self.pending = None  # вид под курсором и с какого момента: показываем, если продержался morph_min_ms
         self.sets, self.sig, self.sig_seen, self.sig_t = {}, None, None, 0
         self.shape = None  # вид курсора в этом кадре: то, что отдал wc.pointer
+        self.next_t = time.perf_counter()  # когда по расписанию следующий кадр
         self.after(16, self.tick)
 
     @staticmethod
@@ -522,7 +525,8 @@ class LivePreview(tk.Canvas):
         Спрайты собираются по мере надобности — их сотни, а нужны единицы."""
         rc = self.app.cfg["render"]
         sig = (rc["click_scale"], rc["click_tilt_deg"], rc["blur_opacity"], rc["blur_length"], rc["cursor_scale"],
-               rc["motion_tilt_right_deg"], rc["motion_tilt_left_deg"], rc["morph_bounce"])
+               rc["motion_tilt_right_deg"], rc["motion_tilt_left_deg"], rc["morph_bounce"],
+               rc["cursor_theme"], rc["app_cursor_scale"])
         now = time.perf_counter()
         if sig != self.sig:  # пересобрать спрайты, когда ползунок замер на 0.15 с (не на каждом шаге)
             if sig != self.sig_seen:
@@ -535,7 +539,7 @@ class LivePreview(tk.Canvas):
 
             def big(n):
                 if (n, "big") not in self.sets:
-                    self.sets[(n, "big")] = wc.cursor_sprite(n, size * 4, self.custom)
+                    self.sets[(n, "big")] = wc.cursor_sprite(n, size * 4, self.custom, rc["cursor_theme"], rc["app_cursor_scale"])
                 return self.sets[(n, "big")]
             if isinstance(ghost, str):  # шаг смены вида: ghost — прежний вид, level — шаг
                 img, hot = render.morph_sprite(*big(ghost), *big(name), level / render.MORPH_STEPS, rc["morph_bounce"],
@@ -548,15 +552,22 @@ class LivePreview(tk.Canvas):
             elif level or tilt:
                 img, hot = render.pose_sprite(*big(name), rc, level, tilt)
             else:
-                img, hot = wc.cursor_sprite(name, size, self.custom)
+                img, hot = wc.cursor_sprite(name, size, self.custom, rc["cursor_theme"], rc["app_cursor_scale"])
             self.sets[key] = (photo(img), hot, img)
         return self.sets[key]
 
     def tick(self):
         if not self.winfo_exists():  # окно пересобрано (смена языка) — этот холст больше не нужен
             return
-        self.after(16, self.tick)
-        if not self.winfo_viewable():
+        # ровно с fps видео в OBS, как курсор будет в записи: следующий кадр — от расписания, а не от «сейчас»,
+        # иначе 16/17 мс гуляют и кадры скачут. Окно скрыто (трей) — проверяем редко и без точного таймера
+        shown = bool(self.winfo_viewable())
+        wc.fine_timer(shown)
+        period = 1 / (self.app.last_fps or 60) if shown else 0.25
+        now = time.perf_counter()
+        self.next_t = max(self.next_t + period, now)
+        self.after(max(1, round((self.next_t - now) * 1000)), self.tick)
+        if not shown:
             return
         px, py, self.shape, down, showing = wc.pointer()  # окно масштабирует Windows, а курсор — в настоящих пикселях
         mon = next((m for m in self.app.monitors if m["left"] <= px < m["left"] + m["width"]
@@ -622,13 +633,39 @@ class LivePreview(tk.Canvas):
         else:
             self.shown = None  # курсор спрятан (печатают текст) — появится сразу нужным видом, как при рендере
         if ops != self.drawn:
-            self.drawn = ops
-            self.delete("dyn")
-            for op in ops:
-                if len(op) == 5:
-                    self.create_rectangle(*op[:4], fill=op[4], outline=op[4], tags="dyn")
-                else:
-                    self.create_image(op[0], op[1], anchor="nw", image=op[2], tags="dyn")
+            self.draw_ops(ops)
+
+    def draw_ops(self, ops):
+        """Кадр на холст: элементы не пересоздаём (это 10–25 мс на кадр — превью лагало), а двигаем и перекрашиваем.
+        Квадраты (след) — всегда под картинками (свечение, шлейф, курсор), как в списке кадра."""
+        rects, imgs = [op for op in ops if len(op) == 5], [op for op in ops if len(op) == 3]
+        old_r, old_i = self.drawn_r, self.drawn_i
+        for i, op in enumerate(rects):
+            if i >= len(self.rect_items):
+                it = self.create_rectangle(*op[:4], fill=op[4], outline=op[4], tags="dyn")
+                if self.img_items:
+                    self.tag_lower(it, self.img_items[0])
+                self.rect_items.append(it)
+            elif op != old_r[i]:
+                it = self.rect_items[i]
+                if op[:4] != old_r[i][:4]:
+                    self.coords(it, *op[:4])
+                if op[4] != old_r[i][4]:
+                    self.itemconfig(it, fill=op[4], outline=op[4])
+        for i, op in enumerate(imgs):
+            if i >= len(self.img_items):
+                self.img_items.append(self.create_image(op[0], op[1], anchor="nw", image=op[2], tags="dyn"))
+            elif op != old_i[i]:
+                it = self.img_items[i]
+                if op[:2] != old_i[i][:2]:
+                    self.coords(it, op[0], op[1])
+                if op[2] is not old_i[i][2]:
+                    self.itemconfig(it, image=op[2])
+        for items, n in ((self.rect_items, len(rects)), (self.img_items, len(imgs))):
+            for it in items[n:]:
+                self.delete(it)
+            del items[n:]
+        self.drawn, self.drawn_r, self.drawn_i = ops, rects, imgs
 
     def cursor_ops(self, ops, now, mon, s, steps, down, qx, qy, rc):
         """Свечение, «призраки» шлейфа и сам курсор — в список кадра: (x, y, картинка)."""
@@ -639,8 +676,13 @@ class LivePreview(tk.Canvas):
             name = self.handles[self.shape] = f"custom{len(self.custom)}" if snap else "arrow"
             if snap:
                 self.custom[name] = snap
-        if name != self.shown:
+        # вид, мелькнувший короче morph_min_ms, не показываем; вживую будущего не знаем — новый вид ждёт это время
+        if name != (self.pending or (None,))[0]:
+            self.pending = (name, now)
+        hold = rc["morph_min_ms"] if rc["morph_hold"] else 0
+        if name != self.shown and (not self.shown or (now - self.pending[1]) * 1000 >= hold):
             self.morph, self.shown = (self.shown, now) if self.shown else None, name
+        name = self.shown
         morph = 0
         if rc["morph_animation"] and self.morph:
             p = (now - self.morph[1]) * 1000 / rc["morph_ms"]
@@ -689,8 +731,8 @@ class ClickStrip(tk.Canvas):
 
     def draw(self):
         rc = self.app.cfg["render"]
-        img, hot = wc.cursor_sprite("arrow", 84)
-        big, big_hot = wc.cursor_sprite("arrow", 336)
+        img, hot = wc.cursor_sprite("arrow", 84, theme=rc["cursor_theme"])
+        big, big_hot = wc.cursor_sprite("arrow", 336, theme=rc["cursor_theme"])
         self.imgs, w = [], self.winfo_width()
         self.delete("all")
         for i, (p, title) in enumerate(((0, t("покой")), (1, t("нажатие")), (0.4, t("возврат")))):
@@ -1145,7 +1187,8 @@ class App:
         self.toast = self.toast_timer = self.job = None  # плашка рендера; когда её убрать; что рендерится сейчас
         self.folder_pending = False  # папка выбрана без связи с OBS — применить при подключении
         self.monitors = wc.list_monitors()
-        self.detected, self.last_fps, self.log_lines, self.log_win = None, None, [], None
+        # last_fps — fps видео в OBS; OBS закрыт — последний известный (живое превью идёт с этой частотой)
+        self.detected, self.last_fps, self.log_lines, self.log_win = None, self.cfg["ui"]["obs_fps"], [], None
         self.spec, self.page, self.encoder, self.onboarding = {"obs": "offline"}, "rec", None, None
         self.encoder_src = None  # для какого пути к ffmpeg определён кодировщик
         self.ffmpeg_installing = self.ffmpeg_asked = False
@@ -1157,7 +1200,7 @@ class App:
         sans_m = pick("Suisse Intl Medium", "Inter Medium", "Arial")
         mono = pick("SF Mono", "IBM Plex Mono", "Consolas")
         F.update(head=(sans, -74), body=(sans, 10), small=(sans, 9), para=(sans, 11), caps=(sans_m, 8),
-                 nav=(sans, 9), brand=(sans_m, 10), btn=(sans_m, 10), btn_b=(sans_m, 11),
+                 nav=(sans, 9), brand=(sans_m, 10), btn=(sans_m, 10), btn_b=(sans_m, 11), btn_xl=(sans_m, 13),
                  mono=(mono, 10), mono_s=(mono, 8), mono_b=(mono, 15), mono_m=(mono, 11))
 
         root.title(APP)
@@ -1207,10 +1250,7 @@ class App:
         self.root.after(3000, self.watch_obs)
         self.root.after(3000, lambda: threading.Thread(target=self._check_update, daemon=True).start())
         self.start_tray()
-        try:
-            autostart.sync(self.cfg["ui"]["with_obs"])
-        except OSError as e:
-            log.warning(t("Не удалось настроить запуск вместе с OBS: %s"), e)
+        self.with_obs_changed()
         threading.Thread(target=autostart.on_show, args=(lambda: self.post(self.show_window),), daemon=True).start()
         ui = self.cfg["ui"]
         if not ("--with-obs" in sys.argv and ui["tray"] and ui["onboarded"] and self.tray):
@@ -1447,16 +1487,10 @@ class App:
         hero = tk.Frame(page, bg=BG)
         hero.pack(fill="x", pady=(26, 0))
         left = tk.Frame(hero, bg=BG)
-        left.pack(side="left", anchor="n", fill="y")
+        # по центру превью вместе с подписью под ним; текст и отступы крупнее, чтобы блок был ему под стать
+        left.pack(side="left", anchor="w")
         right = tk.Frame(hero, bg=BG)
         right.pack(side="right", anchor="n")
-        head = tk.Canvas(left, width=470, height=164, bg=BG, highlightthickness=0)
-        head.create_text(-4, 0, anchor="nw", text="Smooth", font=F["head"], fill=INK)
-        head.create_text(-4, 74, anchor="nw", text="cursor.", font=F["head"], fill=INK)
-        head.pack(anchor="w")
-        self.lbl(left, t("Записывайте как обычно — курсор на видео станет плавным сам. "
-                         "Справа живое превью: так курсор будет выглядеть с текущими настройками."),
-                 "para", INK2, justify="left", wraplength=430).pack(anchor="w", pady=(4, 22))
         row = tk.Frame(left, bg=BG)
         row.pack(anchor="w")
         self.rec_btn = Btn(row, t("Начать запись"), self.toggle, kind="primary", big=True)
@@ -1467,26 +1501,27 @@ class App:
         self.rec_dot.pack(side="left")
         self.time_lbl = self.lbl(row, "00:00", "mono_b", LINE)
         self.time_lbl.pack(side="left", padx=(6, 0))
-        self.toggle_row(left, t("Рендерить сразу после записи"), "ui.auto_render").pack(anchor="w", pady=(14, 0))
+        self.toggle_row(left, t("Рендерить сразу после записи"), "ui.auto_render").pack(
+            anchor="w", pady=(24, 0))
         ov = self.toggle_row(left, t("Значок записи в углу экрана"), "ui.rec_overlay", self.sync_overlay)
         if WIN:  # на Linux значок попал бы в видео, а курсор в кадр не впекается
-            ov.pack(anchor="w", pady=(6, 0))
+            ov.pack(anchor="w", pady=(12, 0))
         self.hint_on((ov, *ov.winfo_children()), "Значок записи",
                      "в углу экрана: идёт ли запись, пауза и стоп; перетаскивается мышью. На видео его нет.")
         ck = self.toggle_row(left, t("Проверять перед записью, что курсора нет в кадре"), "obs.check_cursor")
         if WIN:
-            ck.pack(anchor="w", pady=(6, 0))
+            ck.pack(anchor="w", pady=(12, 0))
         self.hint_on((ck, *ck.winfo_children()), "Проверка курсора",
-                     "не попал ли курсор в кадр OBS (бывает на 4K); если да — захват на «Windows 10». Один раз на экран.")
+                     "не попал ли курсор в кадр OBS (бывает на 4K); если да — захват «Windows 10». Раз на экран.")
         now = tk.Frame(left, bg=BG)
-        now.pack(anchor="w", pady=(22, 0))
+        now.pack(anchor="w", pady=(28, 0))
         top_now = tk.Frame(now, bg=BG)
-        top_now.pack(fill="x", pady=(0, 6))
+        top_now.pack(fill="x", pady=(0, 10))
         self.lbl(top_now, t("СЕЙЧАС В OBS"), "caps", INK).pack(side="left")
         Btn(top_now, t("Проверить"), self.refresh_obs, small=True).pack(side="left", padx=(14, 0))
-        self.now = [self.lbl(now, "", "small", INK2, anchor="w") for _ in range(3)]
+        self.now = [self.lbl(now, "", "body", INK2, anchor="w") for _ in range(3)]
         for w in self.now:
-            w.pack(anchor="w")
+            w.pack(anchor="w", pady=(0, 3))
 
         self.preview = LivePreview(right, self, 726, 330)
         self.preview.pack(anchor="e")
@@ -1718,7 +1753,7 @@ class App:
         body.columnconfigure(1, weight=1)
         return body, h
 
-    def toggle_row(self, parent, text, path, on_change=None):
+    def toggle_row(self, parent, text, path, on_change=None, font="body"):
         f = tk.Frame(parent, bg=parent["bg"])
 
         def changed(v):
@@ -1729,8 +1764,8 @@ class App:
 
         tg = Toggle(f, get(self.cfg, path), changed)
         tg.pack(side="left")
-        lab = self.lbl(f, t(text), "body", INK, cursor="hand2")
-        lab.pack(side="left", padx=(10, 0))
+        lab = self.lbl(f, t(text), font, INK, cursor="hand2")
+        lab.pack(side="left", padx=(12, 0))
         lab.bind("<Button-1>", lambda e: tg.flip())
         return f
 
@@ -1741,10 +1776,11 @@ class App:
                 f"{caps(t(title))}  —  {text() if callable(text) else t(text)}"), add="+")
             w.bind("<Leave>", lambda e: self.show_caption(None), add="+")
 
-    def slider(self, parent, row, text, path, lo, hi, step, hint="", live_hint=None, fmt=None):
-        """Строка: подпись | ползунок | значение. Пояснение — под превью при наведении.
-        Значение можно вписать: клик по нему выделяет число, Enter или клик мимо — применить, Esc — отмена."""
-        name = self.lbl(parent, t(text))
+    def slider(self, parent, row, text, path, lo, hi, step, hint="", live_hint=None, fmt=None, name=None):
+        """Строка: подпись | ползунок | значение. Пояснение — под превью при наведении. name — свой виджет вместо
+        подписи (переключатель с подписью). Значение можно вписать: клик по нему выделяет число, Enter или клик мимо
+        — применить, Esc — отмена."""
+        name = name or self.lbl(parent, t(text))
         name.grid(row=row, column=0, sticky="w", pady=3)
         bg = parent["bg"]
         value = tk.Entry(parent, width=7, justify="right", relief="flat", bd=0, bg=bg, fg=INK, font=F["mono"],
@@ -1889,22 +1925,27 @@ class App:
     def preset_label(self, key):
         return key[3:] if key.startswith("my:") else t(self.PRESET_NAMES[key])  # своё имя — как есть
 
-    def preset_menu(self):
-        """Выпадающий список пресетов под кнопкой — в стиле программы, закрывается кликом мимо или Esc.
-        Ниже пресетов — точный motion blur: он с любым пресетом, поэтому отдельным флажком."""
-        b, cur = self.preset_btn, settings.preset_of(self.cfg)
+    def popup(self, b, width=20):
+        """Выпадающий список под кнопкой b в стиле программы, закрывается кликом мимо или Esc.
+        Возвращает (окно, рамка, item(отмечен, подпись, действие, delete=None))."""
         m = tk.Toplevel(self.root, bg=INK)
         m.overrideredirect(True)
         m.geometry(f"+{b.winfo_rootx()}+{b.winfo_rooty() + b.winfo_height() + 4}")
-        box = tk.Frame(m, bg=BG)
-        box.pack(padx=1, pady=1)
+        outer = tk.Frame(m, bg=BG)
+        outer.pack(padx=1, pady=1)
+        cv = tk.Canvas(outer, bg=BG, highlightthickness=0, bd=0, yscrollincrement=17)  # прокрутка, если не влезает
+        cv.pack(side="left")
+        box = tk.Frame(cv, bg=BG)
+        cv.create_window(0, 0, anchor="nw", window=box)
+        sb = ttk.Scrollbar(outer, command=cv.yview)
+        cv.configure(yscrollcommand=sb.set)
 
         def item(marked, label, action, delete=None):
             row = tk.Frame(box, bg=BG, cursor="hand2")
             row.pack(fill="x")
             mark = self.lbl(row, "■" if marked else "", "small", INK, width=2)
             mark.pack(side="left", padx=(10, 0), pady=7)
-            lab = self.lbl(row, label, "body", INK, anchor="w", width=20)
+            lab = self.lbl(row, label, "body", INK, anchor="w", width=width)
             lab.pack(side="left", padx=(2, 14))
             parts = [row, mark, lab]
             if delete:  # ✕ — со второго клика: первый спрашивает «удалить?»
@@ -1918,6 +1959,41 @@ class App:
             for w in parts[:3]:
                 w.bind("<Button-1>", lambda e: (m.destroy(), action()))
 
+        def focus_out(_):  # закрыть, когда фокус ушёл из меню совсем, а не в поле внутри него
+            def check():
+                if m.winfo_exists() and ((f := m.focus_get()) is None or f.winfo_toplevel() is not m):
+                    m.destroy()
+            m.after_idle(check)
+
+        m.bind("<Escape>", lambda e: m.destroy())
+        m.bind("<FocusOut>", focus_out)
+        m.after_idle(m.focus_force)
+
+        def fit():  # под кнопкой, но не ниже края её монитора: что не влезло — прокруткой
+            m.update_idletasks()  # иначе размер ещё не посчитан: пункты добавлены, а Tk их не разложил
+            w, h = box.winfo_reqwidth(), box.winfo_reqheight()
+            x, y = b.winfo_rootx(), b.winfo_rooty() + b.winfo_height() + 4
+            left, top, right, bottom = wc.work_area(b.winfo_rootx(), b.winfo_rooty())
+            room = bottom - y - 12
+            if room < min(h, 200):  # кнопка у самого низа — тогда уж над ней
+                room = min(h, b.winfo_rooty() - top - 16)
+                y = b.winfo_rooty() - 4 - room - 2
+            cv.configure(width=w, height=min(h, room), scrollregion=(0, 0, w, h))
+            if h > room:
+                sb.pack(side="right", fill="y")
+                scroll = lambda e: cv.yview_scroll(-1 if e.delta > 0 or e.num == 4 else 1, "units")
+                for ev in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+                    m.bind(ev, scroll)
+            m.update_idletasks()
+            m.geometry(f"+{max(left, min(x, right - m.winfo_reqwidth()))}+{max(top, y)}")
+        m.after_idle(fit)
+        return m, box, item
+
+    def preset_menu(self):
+        """Выпадающий список пресетов. Ниже пресетов — точный motion blur: он с любым пресетом, поэтому отдельным
+        флажком."""
+        cur = settings.preset_of(self.cfg)
+        m, box, item = self.popup(self.preset_btn)
         for name in self.PRESET_NAMES:
             item(name == cur, self.preset_label(name), lambda n=name: self.pick_preset(n))
         self.lbl(box, t("Меняет сглаживание и эффекты.\nДальше можно подстроить ползунками."), "small", MUTE,
@@ -1947,15 +2023,40 @@ class App:
                         "рывках\nрендер до 1,6× дольше, шлейф бледнее копий."), "small", MUTE,
                  justify="left").pack(anchor="w", padx=12, pady=(4, 10))
 
-        def focus_out(_):  # закрыть, когда фокус ушёл из меню совсем, а не в поле имени
-            def check():
-                if m.winfo_exists() and ((f := m.focus_get()) is None or f.winfo_toplevel() is not m):
-                    m.destroy()
-            m.after_idle(check)
+    def theme_label(self):
+        th = self.cfg["render"]["cursor_theme"]
+        return t("Как в системе") if not th else th[7:] if th.startswith("scheme:") else Path(th).name
 
-        m.bind("<Escape>", lambda e: m.destroy())
-        m.bind("<FocusOut>", focus_out)
-        m.focus_force()
+    def theme_menu(self):
+        wc.refresh_themes()  # поставили или поменяли пак курсоров при открытой программе — видно сразу
+        cur = self.cfg["render"]["cursor_theme"]
+        m, box, item = self.popup(self.theme_btn, width=28)
+        # свой файл — первым и отдельно: это не схема из списка, а выбор файла
+        self.lbl(box, t("СВОЙ КУРСОР"), "caps", INK).pack(anchor="w", padx=12, pady=(10, 2))
+        own = cur and not cur.startswith("scheme:")
+        item(own, Path(cur).name if own else t("Свой файл .cur…"), self.pick_theme_file)
+        self.lbl(box, t("Свой файл станет стрелкой, остальные виды —\nиз файлов рядом с ним по именам."), "small",
+                 MUTE, justify="left").pack(anchor="w", padx=12, pady=(4, 10))
+        tk.Frame(box, height=1, bg=RULE).pack(fill="x", padx=10)
+        item(not cur, t("Как в системе"), lambda: self.pick_theme(""))
+        if schemes := wc.cursor_schemes():
+            tk.Frame(box, height=1, bg=RULE).pack(fill="x", padx=10)
+            self.lbl(box, t("СХЕМЫ WINDOWS"), "caps", INK).pack(anchor="w", padx=12, pady=(10, 2))
+        for n in schemes:
+            item(cur == "scheme:" + n, n, lambda n=n: self.pick_theme("scheme:" + n))
+
+    def pick_theme_file(self):
+        f = filedialog.askopenfilename(title=t("Курсор-стрелка"), filetypes=[(t("Курсор"), "*.cur *.ani")])
+        if f:
+            self.pick_theme(f)
+
+    def pick_theme(self, theme):
+        wc.refresh_themes()  # тот же файл, но заменённый на диске, — тоже свежий
+        self.preview.sets, self.preview.sig = {}, None  # превью — сразу новым курсором
+        self.cfg["render"]["cursor_theme"] = theme
+        settings.save(self.cfg)
+        self.theme_btn.set_text(self.theme_label())
+        self.strip.draw()
 
     def pick_preset(self, name):
         settings.apply_preset(self.cfg, name)
@@ -1997,14 +2098,14 @@ class App:
                     "1 — без перелёта. Меньше — курсор слегка проскакивает цель, больше — вязко.")
         self.euro_box, _ = self.section(l, "One Euro")
         self.slider(self.euro_box, 0, "Мин. частота", "smoothing.one_euro.min_cutoff", 0.1, 5, 0.1,
-                    "Гц. Меньше — сильнее сглаживаются медленные движения.")
+                    "Гц. Меньше — сильнее сглаживаются медленные движения.", fmt=lambda v: f"{v:.1f} {t('Гц')}")
         self.slider(self.euro_box, 1, "Бета", "smoothing.one_euro.beta", 0, 0.05, 0.001,
                     "Больше — меньше задержка на быстрых движениях.")
         g, _ = self.section(r, "Общее")
         self.slider(g, 0, "Притяжение к клику", "smoothing.click_pull_ms", 0, 400, 10,
-                    "мс до и после клика: курсор приходит точно в точку клика (видно на готовом видео).")
+                    "мс до и после клика: курсор приходит точно в точку клика (видно на готовом видео).", fmt=lambda v: f"{v} {t('мс')}")
         self.slider(g, 1, "Мёртвая зона", "smoothing.deadzone_px", 0, 10, 1,
-                    "px: дрожание руки меньше этого радиуса не двигает курсор.")
+                    "px: дрожание руки меньше этого радиуса не двигает курсор.", fmt=lambda v: f"{v} px")
         self.method_changed(self.cfg["smoothing"]["method"])
 
     def method_changed(self, m):
@@ -2021,31 +2122,53 @@ class App:
         self.toggle_row(h, "включено", "render.click_animation").pack(side="right")
         self.strip = ClickStrip(g, self)
         self.strip.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 4))
-        self.slider(g, 1, "Сжатие до", "render.click_scale", 0.5, 1, 0.01, "Доля размера в самой глубокой точке.")
+        self.slider(g, 1, "Сжатие до", "render.click_scale", 0.5, 1, 0.01, "Доля размера в самой глубокой точке.",
+                    fmt=lambda v: f"{round(v * 100)}%")
         self.slider(g, 2, "Наклон", "render.click_tilt_deg", -45, 45, 1,
                     "Градусы против часовой вокруг кончика стрелки; минус — по часовой.", fmt=lambda v: f"{v}°")
         self.slider(g, 3, "Длительность", "render.click_ms", 100, 1000, 10,
-                    "мс: первая четверть — нажатие, затем плавный возврат. Пока кнопка зажата, наклон держится.")
+                    "мс: первая четверть — нажатие, затем плавный возврат. Пока кнопка зажата, наклон держится.",
+                    fmt=lambda v: f"{v} {t('мс')}")
         g, h = self.section(l, "Смена курсора")
         self.toggle_row(h, "включено", "render.morph_animation").pack(side="right")
+        self.hint_on((h, *h.winfo_children()), "Смена курсора",
+                     "стрелка → рука или текст: новый вид вырастает из прежнего, а не появляется сразу.")
+        note = lambda row, text: self.lbl(g, t(text), "small", MUTE, justify="left", wraplength=560).grid(
+            row=row, column=0, columnspan=3, sticky="w", pady=(2, 10))  # пояснение под настройками — на виду
         self.slider(g, 0, "Длительность", "render.morph_ms", 100, 800, 10,
-                    "мс: прежний вид сжимается в точку, новый вырастает из неё с отскоком — стрелка → рука, "
-                    "инструменты Premiere и DaVinci.")
+                    "мс: прежний вид сжимается в точку, новый вырастает из неё с отскоком.", fmt=lambda v: f"{v} {t('мс')}")
         self.slider(g, 1, "Отскок", "render.morph_bounce", 0, 0.4, 0.01,
                     "На сколько новый вид проскакивает крупнее, прежде чем встать на место. 0 — без отскока.",
                     fmt=lambda v: f"{round(v * 100)}%")
+        note(2, "Когда курсор меняет вид — например, над ссылкой стрелка становится рукой, — новый вид плавно "
+                "вырастает из старого, а не появляется рывком.")
+        # строкой в этом же разделе, а не своим: со своим заголовком вкладка не влезала по высоте без прокрутки
+        hold = self.toggle_row(g, "Не менять на миг", "render.morph_hold",
+                               lambda: self.cfg["render"]["morph_hold"] and not self.cfg["ui"]["hold_intro"]
+                               and self.hold_intro())
+        self.slider(g, 3, "Не менять на миг", "render.morph_min_ms", 0, 500, 10,
+                    "вид, мелькнувший короче (пролетели кнопку), не меняется. Превью — с задержкой, видео — без.", fmt=lambda v: f"{v} {t('мс')}",
+                    name=hold)
+        note(4, "Курсор лишь проскочил над кнопкой — вид на видео не меняется, без лишнего мелькания. "
+                "В живом превью смена из-за этого чуть запаздывает, в видео — нет.")
         g, _ = self.section(r, "Курсор")
         self.slider(g, 0, "Размер", "render.cursor_scale", 0.5, 3, 0.05,
-                    "1 — как в системе, с учётом масштаба экрана и масштаба захвата в сцене OBS.")
+                    "1 — как в системе, с учётом масштаба экрана и масштаба захвата в сцене OBS.",
+                    fmt=lambda v: f"×{v:.2f}")
+        self.slider(g, 1, "Курсоры программ", "render.app_cursor_scale", 0.5, 3, 0.05,
+                    "инструменты Premiere, Figma и т. п.: увеличьте, если рядом с вашим курсором они мелкие.", fmt=lambda v: f"×{v:.2f}")
+        name = self.lbl(g, t("Вид"))
+        name.grid(row=2, column=0, sticky="w", pady=3)
+        self.theme_btn = Btn(g, self.theme_label(), self.theme_menu, small=True)
+        self.theme_btn.grid(row=2, column=1, columnspan=2, sticky="w")
+        self.hint_on((name, self.theme_btn), "Вид",
+                     "каким курсором рисовать видео, и после записи тоже. Свой .cur — стрелка, остальное — рядом.")
         g, _ = self.section(r, "Наклон в движении")
         self.slider(g, 0, "Вправо", "render.motion_tilt_right_deg", -45, 90, 1,
-                    "На сколько градусов курсор поворачивается вправо от положения как в Windows, когда едет вправо. "
-                    "При 45° стрелка смотрит вправо так же, как в покое влево; на 45° больше, чем «Влево», — наклон "
-                    "зеркальный. Минус — назад, как от инерции. 0 — выключено.",
+                    "поворот, когда курсор едет вправо. 45° — зеркально покою, минус — назад, 0 — выключено.",
                     fmt=lambda v: f"{v}°")
         self.slider(g, 1, "Влево", "render.motion_tilt_left_deg", -45, 45, 1,
-                    "На сколько градусов курсор поворачивается влево от положения как в Windows, когда едет влево. "
-                    "Минус — назад, как от инерции. 0 — выключено.",
+                    "поворот, когда курсор едет влево. Минус — назад, как от инерции, 0 — выключено.",
                     fmt=lambda v: f"{v}°")
         g, h = self.section(r, "Шлейф · motion blur")
         self.toggle_row(h, "включён", "render.motion_blur").pack(side="right")
@@ -2059,10 +2182,12 @@ class App:
                          "1/60 при 30 fps.")
         else:
             self.slider(g, 0, "Длина", "render.blur_length", 0.1, 1.5, 0.05,
-                        "В долях кадра: 0.5 — как у камеры с выдержкой 180°. В покое и при анимации клика шлейфа нет.")
+                        "В долях кадра: 0.5 — как у камеры с выдержкой 180°. В покое и при анимации клика шлейфа нет.",
+                        fmt=lambda v: f"{round(v * 360)}°")
         if not self.accurate_blur():  # у точного блюра яркость смаза задаёт сама выдержка
             self.slider(g, 1, "Плотность", "render.blur_opacity", 0.2, 2, 0.05,
-                        "Насколько заметен шлейф. В точном режиме не используется.")
+                        "Насколько заметен шлейф. В точном режиме не используется.",
+                        fmt=lambda v: f"{round(v * 100)}%")
 
         def acc_changed():
             rc = self.cfg["render"]
@@ -2161,8 +2286,9 @@ class App:
         self.virtual_ui()
 
     def with_obs_changed(self):
-        try:
-            autostart.sync(self.cfg["ui"]["with_obs"])
+        ui = self.cfg["ui"]
+        try:  # до конца первой настройки вместе с OBS не запускаемся: режим работы ещё не выбран
+            autostart.sync(ui["with_obs"] and ui["onboarded"])
         except OSError as e:
             log.warning(t("Не удалось настроить запуск вместе с OBS: %s"), e)
 
@@ -2439,7 +2565,10 @@ class App:
             log.error("%s", e)
 
     def on_detected(self, device, fps, **spec):
-        self.detected, self.last_fps = device, fps
+        self.detected = device
+        if fps and fps != self.last_fps:
+            self.last_fps = self.cfg["ui"]["obs_fps"] = fps
+            self.schedule_save()
         self.set_spec(**spec)
         self.picker.draw()
 
@@ -2648,6 +2777,32 @@ class App:
                            "Composition Settings → Advanced: Shutter Angle %d°, Shutter Phase %d°"), angle, phase)
         except Exception as e:
             log.error(t("After Effects: %s"), e)
+
+    def hold_intro(self):
+        """Один раз, при первом включении «Не менять на миг»: задержка смены вида — только в живом превью."""
+        self.cfg["ui"]["hold_intro"] = True
+        settings.save(self.cfg)
+        w = tk.Toplevel(self.root, bg=BG)
+        w.title(t("Не менять на миг"))
+        w.resizable(False, False)
+        w.transient(self.root)
+        pad = tk.Frame(w, bg=BG)
+        pad.pack(padx=34, pady=(26, 26))
+        self.lbl(pad, caps(t("Не менять на миг")), "caps", MUTE).pack(anchor="w")
+        tk.Label(pad, text=t("Задержка — только в превью"), font=(F["head"][0], 20), fg=INK, bg=BG).pack(
+            anchor="w", pady=(6, 14))
+        self.lbl(pad, t("Если курсор пролетел кнопку и стал рукой на долю секунды, смены вида\nне будет — без лишней "
+                        "анимации.\n\nВ живом превью новый вид появляется с задержкой на порог: программа\nне знает "
+                        "заранее, надолго ли он. В видео задержки нет — при рендере\nвидна вся запись: короткие "
+                        "мелькания просто пропадают, остальные\nсмены анимируются вовремя."), "para", INK2,
+                 justify="left").pack(anchor="w")
+        self.lbl(pad, t("Это окно показывается один раз."), "small", MUTE).pack(anchor="w", pady=(10, 0))
+        Btn(pad, t("Понятно"), w.destroy, kind="primary").pack(anchor="w", pady=(20, 0))
+        w.bind("<Escape>", lambda e: w.destroy())
+        w.update_idletasks()
+        r = self.root
+        w.geometry(f"+{r.winfo_rootx() + (r.winfo_width() - w.winfo_reqwidth()) // 2}"
+                   f"+{r.winfo_rooty() + (r.winfo_height() - w.winfo_reqheight()) // 2}")
 
     def ae_intro(self, sel):
         w = tk.Toplevel(self.root, bg=BG)

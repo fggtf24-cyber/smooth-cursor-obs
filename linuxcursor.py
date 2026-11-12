@@ -212,10 +212,17 @@ def has_tray():
         x.XCloseDisplay(dpy)
 
 
-def work_area():
-    """Панели рабочего стола Tk не видит: берём весь основной экран, окно поправит оконный менеджер."""
-    m = primary()
+def work_area(x=None, y=None):
+    """Панели рабочего стола Tk не видит: весь основной экран или монитор с точкой (x, y), окно поправит оконный
+    менеджер."""
+    mons = list_monitors()
+    m = next((m for m in mons if x is not None and m["left"] <= x < m["left"] + m["width"]
+              and m["top"] <= y < m["top"] + m["height"]), None) or primary(mons)
     return m["left"], m["top"], m["left"] + m["width"], m["top"] + m["height"]
+
+
+def fine_timer(on):
+    pass  # таймеры Linux и так точные
 
 
 # ---------- OBS ----------
@@ -524,15 +531,28 @@ def fallback_sprite(size):
     return img.resize((size, size), Image.LANCZOS), (size / 24, size / 24)
 
 
-def cursor_file_max(name):
+def cursor_file_max(name, theme=""):
     return 0  # только для экспорта в After Effects, а его на Linux нет
 
 
-def cursor_sprite(name, size, custom=None):
-    """Курсор как RGBA и его hotspot (x, y): системный — size×size по текущей теме; свой курсор программы из лога
-    (custom: {имя: снимок из CursorLogger}) — снимок в масштабе size к системному курсору при записи."""
+def cursor_schemes():
+    return {}  # схемы курсоров — только у Windows; свой .cur выбрать можно
+
+
+def refresh_themes():
+    pass  # свой .cur читается заново при каждом спрайте
+
+
+def cursor_sprite(name, size, custom=None, theme="", app_scale=1.0):
+    """Курсор как RGBA и его hotspot (x, y): системный — size×size по текущей теме или своему набору theme (путь к
+    .cur, см. cursorcore.pack_files); свой курсор программы из лога (custom: {имя: снимок из CursorLogger}) — снимок
+    в масштабе size к системному курсору при записи, ещё × app_scale."""
     if custom and name in custom:
-        return cursorcore.custom_sprite(custom[name], size)
+        return cursorcore.custom_sprite(custom[name], size * app_scale)
+    files = cursorcore.pack_files(theme) if theme and not theme.startswith("scheme:") else {}
+    if name in files:
+        with contextlib.suppress(OSError, ValueError, StopIteration, SyntaxError):
+            return cursorcore.cur_sprite(files[name], size)
     theme = os.environ.get("XCURSOR_THEME") or _gsettings("cursor-theme") or "default"
     names, dirs = CURSORS.get(name, CURSORS["arrow"]), theme_dirs()
     path = find_cursor(names, theme, dirs) or find_cursor(names, "Adwaita", dirs) or find_cursor(names, "DMZ-White", dirs)

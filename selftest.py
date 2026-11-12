@@ -2,6 +2,7 @@
 import copy
 import json
 import struct
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -10,6 +11,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+import cursorcore
 import render
 import settings
 import smoothing
@@ -350,11 +352,39 @@ def check_custom_cursor():
     custom = json.loads(json.dumps(lg.to_dict(0)))["custom"]
     img, _ = wc.cursor_sprite("custom0", round(lg.ref * 2), custom)
     assert img.width == round(lg.custom["custom0"]["ref"] * 2) and img.getchannel("A").getextrema()[1] == 255
+    img2, _ = wc.cursor_sprite("custom0", round(lg.ref * 2), custom, app_scale=1.5)  # «Курсоры программ» × 1.5
+    assert abs(img2.width - img.width * 1.5) <= 1, (img.width, img2.width)
     print("свой курсор программы: ок")
+
+
+def check_cursor_theme():
+    """Вид курсора для рендера: схема Windows, свой .cur и виды из файлов рядом по именам паков."""
+    black = wc.theme_files("scheme:Windows Black")
+    assert black["arrow"].lower().endswith("arrow_r.cur") and black["ibeam"].lower().endswith("beam_r.cur"), black
+    a, _ = wc.cursor_sprite("arrow", 64)
+    b, _ = wc.cursor_sprite("arrow", 64, theme="scheme:Windows Black")
+    assert a.tobytes() != b.tobytes() and b.getchannel("A").getextrema()[1] == 255
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(r"C:\Windows\Cursors")
+        for name, f in (("Normal.cur", "aero_arrow.cur"), ("Link.cur", "aero_link.cur"), ("Text.cur", "beam_r.cur"),
+                        ("Busy.ani", "aero_busy.ani"), ("Working.ani", "aero_working.ani"), ("Diagonal2.cur", "aero_nesw.cur"),
+                        ("Handwriting.cur", "aero_pen.cur"), ("Vertical.cur", "aero_ns.cur")):
+            shutil.copy(src / f, Path(tmp) / name)
+        files = {k: Path(v).name for k, v in cursorcore.pack_files(Path(tmp) / "Normal.cur").items()}
+        assert files == {"arrow": "Normal.cur", "hand": "Link.cur", "ibeam": "Text.cur", "wait": "Busy.ani",
+                         "busy": "Working.ani", "size_nesw": "Diagonal2.cur", "size_ns": "Vertical.cur"}, files
+        img, hot = cursorcore.cur_sprite(Path(tmp) / "Normal.cur", 64)  # путь Linux: без Windows, через Pillow
+        assert img.width == 64 and hot[0] < 8 and hot[1] < 8 and img.getchannel("A").getextrema()[1] == 255, (img.size, hot)
+    assert cursorcore.pack_files("нет такого.cur") == {}
+    print("вид курсора: ок")
 
 
 def check_morph():
     """Анимация смены вида курсора: шаги по кадрам, спрайт перехода, рендер обоими шлейфами и слои для AE."""
+    # «Не менять на миг»: рука на 3 кадра (100 мс при 30 fps) пропадает, на 20 — остаётся; в конце видео — как есть
+    k, v = np.array([0] * 10 + [1] * 3 + [0] * 10 + [1] * 20 + [2] * 2), np.ones(45, bool)
+    assert render.hold_types(k, v, 150, 30).tolist() == [0] * 23 + [1] * 20 + [2] * 2
+    assert render.hold_types(k, v, 0, 30).tolist() == k.tolist()
     import ae
     kind, vis = np.array([0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 2, 2]), np.ones(13, bool)
     vis[9:11] = False  # курсор спрятан, потом появился другим видом — без анимации
@@ -398,7 +428,7 @@ def check_morph():
         assert -img.width < hx < 2 * img.width and -img.height < hy < 2 * img.height, ("переход: hotspot", p)
     cfg = settings.load()
     cfg["sync"]["offset_ms"] = 0
-    cfg["render"].update(codec="libx264", morph_animation=True, morph_ms=200, click_animation=True,
+    cfg["render"].update(codec="libx264", morph_animation=True, morph_ms=200, morph_min_ms=0, click_animation=True,
                          motion_blur=True, debug_raw=False, export_keyframes=False, motion_tilt_right_deg=72,
                          motion_tilt_left_deg=27)
     ff = render.tool(cfg["render"]["ffmpeg"], "ffmpeg")
@@ -850,6 +880,7 @@ if __name__ == "__main__":
         check_hotkey_released()
         check_virtual_mode()
         check_custom_cursor()
+        check_cursor_theme()
     check_obs_buttons()
     check_render_toast()
     check_cursor_elsewhere()

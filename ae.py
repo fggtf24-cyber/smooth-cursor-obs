@@ -185,8 +185,8 @@ def export(video, log_path, cfg):
         if sprites and not (vis & (track["type"] == k)).any():
             break
         name = types[k] if k < len(types) else "arrow"
-        px = max(size * SPRITE_X, wc.cursor_file_max(name))
-        img, (hx, hy) = wc.cursor_sprite(name, px, lg.get("custom"))
+        px = max(size * SPRITE_X, wc.cursor_file_max(name, rc["cursor_theme"]))
+        img, (hx, hy) = wc.cursor_sprite(name, px, lg.get("custom"), rc["cursor_theme"], rc["app_cursor_scale"])
         png = out / f"cursor_{name}.png"
         img.save(png)
         sprites.append({"type": name, "png": str(png), "w": img.width, "h": img.height, "hx": hx, "hy": hy,
@@ -200,8 +200,8 @@ def export(video, log_path, cfg):
     px = size * SPRITE_X
     for a, b, m in morphs:
         na, nb = (types[x] if x < len(types) else "arrow" for x in (a, b))
-        img, (hx, hy) = render.morph_sprite(*wc.cursor_sprite(na, px, lg.get("custom")),
-                                            *wc.cursor_sprite(nb, px, lg.get("custom")), m / render.MORPH_STEPS,
+        img, (hx, hy) = render.morph_sprite(*wc.cursor_sprite(na, px, lg.get("custom"), rc["cursor_theme"], rc["app_cursor_scale"]),
+                                            *wc.cursor_sprite(nb, px, lg.get("custom"), rc["cursor_theme"], rc["app_cursor_scale"]), m / render.MORPH_STEPS,
                                             rc["morph_bounce"], 1)
         png = out / f"cursor_m{m}_{na}_{nb}.png"
         img.save(png)

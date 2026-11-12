@@ -213,23 +213,49 @@ EN.update({
     "Смена курсора": "Cursor change", "Отскок": "Bounce",
     "На сколько новый вид проскакивает крупнее, прежде чем встать на место. 0 — без отскока.":
         "How much bigger the new cursor overshoots before it settles. 0 — no bounce.", "Кино + смена курсора": "Cinematic + cursor change",
-    "мс: прежний вид сжимается в точку, новый вырастает из неё с отскоком — стрелка → рука, инструменты Premiere и "
-    "DaVinci.":
-        "ms: the old cursor shrinks to a point, the new one grows out of it with a bounce — arrow → hand, "
-        "Premiere and DaVinci tools.",
+    "мс: прежний вид сжимается в точку, новый вырастает из неё с отскоком.":
+        "ms: the old shape shrinks to a point, the new one grows out of it with a bounce.",
     "мс: первая четверть — нажатие, затем плавный возврат. Пока кнопка зажата, наклон держится.":
         "ms: the first quarter presses in, the rest eases back. The tilt holds while the button is down.",
+    "СХЕМЫ WINDOWS": "WINDOWS SCHEMES",
+    "СВОЙ КУРСОР": "YOUR CURSOR",
+    "Не менять на миг": "Ignore flickers", "Порог": "Threshold",
+    "мс": "ms", "Гц": "Hz",
+    "Когда курсор меняет вид — например, над ссылкой стрелка становится рукой, — новый вид плавно "
+    "вырастает из старого, а не появляется рывком.":
+        "When the cursor changes shape — say, the arrow turns into a hand over a link — the new shape smoothly "
+        "grows out of the old one instead of popping in.",
+    "Курсор лишь проскочил над кнопкой — вид на видео не меняется, без лишнего мелькания. "
+    "В живом превью смена из-за этого чуть запаздывает, в видео — нет.":
+        "The cursor just slipped over a button — its shape in the video stays, no needless flicker. "
+        "Because of this the live preview switches a bit late; the video doesn't.",
+    "стрелка → рука или текст: новый вид вырастает из прежнего, а не появляется сразу.":
+        "arrow → hand or text: the new shape grows out of the old one instead of popping in.",
+    "Задержка — только в превью": "The delay is only in the preview", "Понятно": "Got it",
+    "Если курсор пролетел кнопку и стал рукой на долю секунды, смены вида\nне будет — без лишней "
+    "анимации.\n\nВ живом превью новый вид появляется с задержкой на порог: программа\nне знает "
+    "заранее, надолго ли он. В видео задержки нет — при рендере\nвидна вся запись: короткие "
+    "мелькания просто пропадают, остальные\nсмены анимируются вовремя.":
+        "If the cursor flies over a button and turns into a hand for a split second,\nthe shape "
+        "will not change — no extra animation.\n\nIn the live preview a new shape appears after the "
+        "threshold delay:\nthe app cannot know in advance how long it will last. The video has\nno "
+        "delay — rendering sees the whole recording: brief flickers just disappear,\nother changes "
+        "animate on time.",
+    "вид, мелькнувший короче (пролетели кнопку), не меняется. Превью — с задержкой, видео — без.":
+        "a shape shown for less than this (flew over a button) is skipped. Preview: delayed, video: not.",
+    "Свой файл станет стрелкой, остальные виды —\nиз файлов рядом с ним по именам.":
+        "Your file becomes the arrow, other shapes —\nfrom files next to it, by name.",
+    "Курсоры программ": "App cursors", "Вид": "Look", "Как в системе": "As in the system",
+    "Свой файл .cur…": "Own .cur file…", "Курсор-стрелка": "Arrow cursor",
+    "инструменты Premiere, Figma и т. п.: увеличьте, если рядом с вашим курсором они мелкие.":
+        "Premiere, Figma and other app tools: scale up if they look tiny next to your cursor.",
+    "каким курсором рисовать видео, и после записи тоже. Свой .cur — стрелка, остальное — рядом.":
+        "which cursor the video uses, even after recording. Own .cur — the arrow, rest from its folder.",
     "Курсор": "Cursor", "Размер": "Size", "Наклон в движении": "Lean in motion", "Вправо": "Right", "Влево": "Left",
-    "На сколько градусов курсор поворачивается вправо от положения как в Windows, когда едет вправо. При 45° "
-    "стрелка смотрит вправо так же, как в покое влево; на 45° больше, чем «Влево», — наклон зеркальный. Минус — "
-    "назад, как от инерции. 0 — выключено.":
-        "How many degrees the cursor turns right from its Windows pose when moving right. At 45° the arrow points "
-        "right just as it points left at rest; 45° more than Left makes the lean a mirror image. Negative leans "
-        "back, like inertia. 0 is off.",
-    "На сколько градусов курсор поворачивается влево от положения как в Windows, когда едет влево. Минус — назад, "
-    "как от инерции. 0 — выключено.":
-        "How many degrees the cursor turns left from its Windows pose when moving left. Negative leans back, like "
-        "inertia. 0 is off.",
+    "поворот, когда курсор едет вправо. 45° — зеркально покою, минус — назад, 0 — выключено.":
+        "lean while moving right. 45° mirrors the resting pose, minus leans back, 0 is off.",
+    "поворот, когда курсор едет влево. Минус — назад, как от инерции, 0 — выключено.":
+        "lean while moving left. Minus leans back, as if from inertia, 0 is off.",
     "1 — как в системе, с учётом масштаба экрана и масштаба захвата в сцене OBS.":
         "1 is the system size, adjusted for display scaling and the capture scale in the OBS scene.",
     "Шлейф · motion blur": "Trail · motion blur", "Длина": "Length",
@@ -266,8 +292,8 @@ EN.update({
     "Выключать захват курсора в источниках сцены": "Turn off cursor capture in scene sources",
     "Проверять перед записью, что курсора нет в кадре": "Check before recording that the cursor is not in the frame",
     "Проверка курсора": "Cursor check",
-    "не попал ли курсор в кадр OBS (бывает на 4K); если да — захват на «Windows 10». Один раз на экран.":
-        "whether the cursor got into the OBS frame (happens on 4K); if so, capture goes “Windows 10”. Once per start.",
+    "не попал ли курсор в кадр OBS (бывает на 4K); если да — захват «Windows 10». Раз на экран.":
+        "whether the cursor got into the OBS frame (happens on 4K); if so — «Windows 10» capture. Once per screen.",
     "Горячая клавиша": "Hotkey", "ГОРЯЧАЯ КЛАВИША": "HOTKEY", "Старт и стоп": "Start / stop", "Применить": "Apply",
     "Горячая клавиша: %s": "Hotkey: %s", "Непонятная горячая клавиша: {}": "Unrecognized hotkey: {}",
     "Идёт запись — сначала остановите её.": "Recording in progress — stop it first.",

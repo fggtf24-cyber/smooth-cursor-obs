@@ -1,6 +1,7 @@
 """Win32 через ctypes: DPI awareness, поиск дисплея, логгер курсора, спрайты системных курсоров."""
 import base64
 import contextlib
+import functools
 import ctypes as C
 import ctypes.wintypes as W
 import io
@@ -13,6 +14,7 @@ import winreg
 import numpy as np
 from PIL import Image
 
+import cursorcore
 from autostart import running_exe  # noqa: F401 — wc.running_exe зовут ae.py и premiere.py
 from i18n import t
 
@@ -30,6 +32,15 @@ if not user32.AreDpiAwarenessContextsEqual(user32.GetThreadDpiAwarenessContext()
     raise RuntimeError("Не удалось включить Per-Monitor DPI Aware v2")
 user32.SetThreadDpiAwarenessContext.argtypes = [C.c_void_p]
 user32.SetThreadDpiAwarenessContext.restype = C.c_void_p
+_winmm, _fine = C.WinDLL("winmm"), [False]
+
+
+def fine_timer(on):
+    """Таймер 1 мс, пока видно живое превью: иначе Tk тикает ~64 Гц и превью на мониторах 144–240 Гц подтормаживает.
+    Окно скрыто (трей) — отпускаем: точный таймер стоит энергии всей системе."""
+    if on != _fine[0]:
+        (_winmm.timeBeginPeriod if on else _winmm.timeEndPeriod)(1)
+        _fine[0] = on
 
 
 @contextlib.contextmanager
@@ -60,6 +71,9 @@ gdi32.SelectObject.argtypes = [W.HDC, W.HGDIOBJ]
 gdi32.SelectObject.restype = W.HGDIOBJ
 gdi32.DeleteObject.argtypes = [W.HGDIOBJ]
 gdi32.GetObjectW.argtypes = [W.HGDIOBJ, C.c_int, C.c_void_p]
+user32.MonitorFromPoint.argtypes = [W.POINT, W.DWORD]
+user32.MonitorFromPoint.restype = W.HMONITOR
+user32.GetMonitorInfoW.argtypes = [W.HMONITOR, C.c_void_p]
 
 
 class CURSORINFO(C.Structure):
@@ -315,37 +329,112 @@ def _cursor_file(reg):
         return ""
 
 
-def cursor_file_max(name):
-    """Самая крупная картинка в файле курсора .cur, px: крупнее Windows только растягивает. 0 — не .cur."""
+# Порядок файлов в строке схемы курсоров Windows (реестр Control Panel\Cursors\Schemes)
+SCHEME_ORDER = ("Arrow", "Help", "AppStarting", "Wait", "Crosshair", "IBeam", "NWPen", "No", "SizeNS", "SizeWE",
+                "SizeNWSE", "SizeNESW", "SizeAll", "UpArrow", "Hand")
+
+
+def cursor_schemes():
+    """Схемы курсоров Windows — встроенные (чёрная, инверсная, крупные) и установленные паки: имя → строка файлов."""
+    out = {}
+    for root, key in ((winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\Cursors\Schemes"),
+                      (winreg.HKEY_CURRENT_USER, r"Control Panel\Cursors\Schemes")):
+        with contextlib.suppress(OSError), winreg.OpenKey(root, key) as k:
+            for i in range(winreg.QueryInfoKey(k)[1]):
+                name, val, _ = winreg.EnumValue(k, i)
+                if isinstance(val, str) and val.count(",") >= len(SCHEME_ORDER) - 1:
+                    out[name] = val
+    return out
+
+
+@functools.lru_cache(maxsize=8)
+def theme_files(theme):
+    """Набор курсоров рендера: {вид: файл}; "" в файле — встроенный курсор Windows; вида нет — как в системе.
+    theme: "" — системная схема, "scheme:<имя>" — схема Windows, иначе путь к своему .cur/.ani."""
+    if not theme:
+        return {}
+    if theme.startswith("scheme:"):
+        schemes = cursor_schemes()
+        files = [os.path.expandvars(f) for f in schemes.get(theme[7:], "").split(",")]
+        if len(files) < len(SCHEME_ORDER):
+            return {}
+        # пусто в схеме (у Magnified, Windows Black нет руки, справки) — вид из стандартной схемы Aero, а не свой
+        # курсор пользователя; нет и там (текст, крестик) — встроенный
+        aero = [os.path.expandvars(f) for f in schemes.get("Windows Aero", "").split(",")] + [""] * len(SCHEME_ORDER)
+        by_reg = {reg: f or a for reg, f, a in zip(SCHEME_ORDER, files, aero)}
+        return {n: by_reg[reg] for n, (_, reg) in CURSORS.items()}
+    return cursorcore.pack_files(theme)
+
+
+@functools.lru_cache(maxsize=8)
+def _borrowed_dark(theme):
+    """Виды, взятые из Aero за неимением своих, если сама схема тёмная (Windows Black): их рисуем инверсией —
+    белая рука Aero становится чёрной с белой обводкой, как стрелка схемы."""
+    if not theme.startswith("scheme:"):
+        return set()
+    own = dict(zip(SCHEME_ORDER, cursor_schemes().get(theme[7:], "").split(",")))
+    borrowed = {n for n, (_, reg) in CURSORS.items() if not own.get(reg) and theme_files(theme).get(n)}
+    if not borrowed:
+        return set()
+    a = np.asarray(cursor_sprite("arrow", 64, theme=theme)[0], float)
+    solid = a[..., 3] > 200
+    return borrowed if solid.any() and a[..., :3][solid].mean() < 100 else set()
+
+
+def refresh_themes():
+    """Забыть прочитанные схемы и файлы курсоров: пак поставили или заменили при открытой программе."""
+    theme_files.cache_clear()
+    _borrowed_dark.cache_clear()
+
+
+def _theme_file(name, theme):
+    files = theme_files(theme or "")
+    return files[name] if name in files else _cursor_file(CURSORS.get(name, CURSORS["arrow"])[1])
+
+
+def _cur_sizes(path):
+    """Размеры картинок в файле .cur, px; [] — не .cur (.ani, встроенный курсор)."""
     try:
-        with open(_cursor_file(CURSORS.get(name, CURSORS["arrow"])[1]), "rb") as f:
+        with open(path, "rb") as f:
             head = f.read(6 + 16 * 64)  # заголовок и каталог картинок: ширина — первый байт записи, 0 — это 256
         if head[2:4] != b"\x02\x00":
-            return 0
-        return max((head[6 + 16 * i] or 256) for i in range(min(int.from_bytes(head[4:6], "little"), 64)))
+            return []
+        return [(head[6 + 16 * i] or 256) for i in range(min(int.from_bytes(head[4:6], "little"), 64))]
     except (OSError, ValueError):
-        return 0
+        return []
 
 
-def cursor_sprite(name, size, custom=None):
-    """Курсор как RGBA и его hotspot (x, y): системный — size×size по текущей схеме Windows; свой курсор программы
-    из лога (custom: {имя: снимок из CursorLogger}) — снимок в масштабе size к системному курсору при записи."""
+def cursor_file_max(name, theme=""):
+    """Самая крупная картинка в файле курсора .cur, px: крупнее Windows только растягивает. 0 — не .cur."""
+    return max(_cur_sizes(_theme_file(name, theme)), default=0)
+
+
+def cursor_sprite(name, size, custom=None, theme="", app_scale=1.0):
+    """Курсор как RGBA и его hotspot (x, y): системный — size×size по схеме Windows или набору theme (см. theme_files);
+    свой курсор программы из лога (custom: {имя: снимок из CursorLogger}) — снимок в масштабе size к системному
+    курсору при записи, ещё × app_scale (подогнать инструменты Premiere, Figma к выбранному размеру)."""
     if custom and name in custom:
-        c = custom[name]
-        img = Image.open(io.BytesIO(base64.b64decode(c["png"]))).convert("RGBA")
-        k = size / c["ref"]
-        w, h = max(1, round(img.width * k)), max(1, round(img.height * k))
-        return img.resize((w, h), Image.LANCZOS), (c["hot"][0] * w / img.width, c["hot"][1] * h / img.height)
-    cid, reg = CURSORS.get(name, CURSORS["arrow"])
-    path = _cursor_file(reg)
-    h = user32.LoadImageW(None, path, 2, size, size, 0x10) if path else None  # IMAGE_CURSOR, LR_LOADFROMFILE
+        return cursorcore.custom_sprite(custom[name], size * app_scale)
+    cid, _ = CURSORS.get(name, CURSORS["arrow"])
+    path = _theme_file(name, theme)
+    # Windows масштабирует курсор по ближайшему пикселю — лесенка. Берём самую крупную картинку файла и уменьшаем
+    # сами, плавно. Всегда самую крупную: мелкие в файле нарисованы отдельно, с обводкой толще, и курсор в покое
+    # отличался бы от курсора в движении (тот собирается из крупного спрайта)
+    sizes = _cur_sizes(path) if path else []
+    load = max(sizes, default=size)
+    h = user32.LoadImageW(None, path, 2, load, load, 0x10) if path else None  # IMAGE_CURSOR, LR_LOADFROMFILE
     shared = not h
     if shared:  # схема без файла — встроенный курсор
-        h = user32.LoadImageW(None, cid, 2, 0, 0, 0x8000)  # LR_SHARED
-    out = handle_sprite(h, size)
+        h, load = user32.LoadImageW(None, cid, 2, 0, 0, 0x8000), size  # LR_SHARED
+    img, hot = handle_sprite(h, load)
     if not shared:
         user32.DestroyCursor(h)
-    return out
+    if load != size:
+        img, hot = img.resize((size, size), Image.LANCZOS), (hot[0] * size / load, hot[1] * size / load)
+    if theme and name != "arrow" and name in _borrowed_dark(theme):  # стрелка своя всегда, по ней и меряем
+        r, g, b, a = img.split()
+        img = Image.merge("RGBA", (*(c.point(lambda v: 255 - v) for c in (r, g, b)), a))
+    return img, hot
 
 
 def snapshot(h, ref):
@@ -423,8 +512,14 @@ def system_shapes():
     return {user32.LoadCursorW(None, cid): n for n, (cid, _) in CURSORS.items()}
 
 
-def work_area():
-    """Рабочая область основного экрана без панели задач: (left, top, right, bottom)."""
-    r = W.RECT()
-    user32.SystemParametersInfoW(0x30, 0, C.byref(r), 0)  # SPI_GETWORKAREA
+def work_area(x=None, y=None):
+    """Рабочая область без панели задач: (left, top, right, bottom) — основного экрана или монитора с точкой (x, y)
+    (в координатах вызывающего потока: в окне программы — как у Tk)."""
+    if x is None:
+        r = W.RECT()
+        user32.SystemParametersInfoW(0x30, 0, C.byref(r), 0)  # SPI_GETWORKAREA
+        return r.left, r.top, r.right, r.bottom
+    mi = MONITORINFOEXW(cbSize=C.sizeof(MONITORINFOEXW))
+    user32.GetMonitorInfoW(user32.MonitorFromPoint(W.POINT(x, y), 2), C.byref(mi))  # MONITOR_DEFAULTTONEAREST
+    r = mi.rcWork
     return r.left, r.top, r.right, r.bottom
