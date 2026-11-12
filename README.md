@@ -1,5 +1,7 @@
 # Smooth Cursor для OBS
 
+**Сайт:** [smoothcursor.ru](https://smoothcursor.ru) · **English:** [smoothcursor.ru/en.html](https://smoothcursor.ru/en.html) — smooth mouse cursor for screen recordings, Windows and Linux.
+
 ![before / Smooth Cursor](assets/demo.gif)
 
 Записывает скринкаст через OBS и сам накладывает плавный курсор, как в Screen Studio: дёрганые движения мыши
