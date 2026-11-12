@@ -490,7 +490,6 @@ class LivePreview(tk.Canvas):
         self.glow = photo(g)
         self.pix, self.trail = {}, collections.deque(maxlen=45)
         self.mon, self.last_t, self.press_t, self.release_t, self.was_down = None, time.perf_counter(), -1e9, -1e9, False
-        self.click_anim_t = -1e9  # когда последний раз играла анимация клика: после неё наклон возвращается плавно
         self.tilt_deg = 0.0  # сглаженный угол наклона в движении
         self.drawn = None  # что нарисовано в прошлом кадре — то же самое не перерисовываем
         self.drawn_r, self.drawn_i, self.rect_items, self.img_items = [], [], [], []  # его квадраты и картинки на холсте
@@ -692,16 +691,13 @@ class LivePreview(tk.Canvas):
             held = np.inf if down else (self.release_t - self.press_t) * 1000  # пока ЛКМ зажата — наклон держится
             level = int(round(float(render.click_curve((now - self.press_t) * 1000, rc["click_ms"], held))
                               * (render.CLICK_STEPS - 1)))
-        if level:  # после клика наклон возвращается плавно
-            self.click_anim_t = now
         (ta, xa), (tb, xb) = self.trail[max(0, len(self.trail) - 2)][:2], self.trail[-1][:2]
         target = float(render.tilt_angle((xb - xa) / max(tb - ta, 1e-3) / (mon["width"] * s),
-                                         rc["motion_tilt_right_deg"], rc["motion_tilt_left_deg"],
-                                         (now - self.click_anim_t) * 1000))
+                                         rc["motion_tilt_right_deg"], rc["motion_tilt_left_deg"]))
         # в реальном времени будущего не знаем — угол догоняет цель плавно (при рендере сглаживание без задержки);
-        # при клике цель 0: наклон не обрывается, а сходит на нет, поворот клика ложится поверх
+        # наклон есть и во время клика, поворот клика ложится поверх — как при рендере
         self.tilt_deg += (target - self.tilt_deg) * (1 - math.exp(-steps / render.TILT_SMOOTH_MS))
-        tilt = round(self.tilt_deg / render.TILT_STEP_DEG)
+        tilt = int(render.click_tilt(round(self.tilt_deg / render.TILT_STEP_DEG), level))
         if morph:  # смена вида — без шлейфа и клика, но с наклоном, как при рендере
             im, (hx, hy), _ = self.cursor(name, morph, render.ghost_tilt(tilt), ghost=self.morph[0])
             return ops.append((round(qx - hx, 1), round(qy - hy, 1), im))

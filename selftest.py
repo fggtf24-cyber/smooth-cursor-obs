@@ -84,13 +84,13 @@ def check_click_animation():
     step = render.smooth_tilt(np.r_[np.zeros(60), np.full(60, -27.0)], 60)  # рывок с места: поворот плавный
     assert np.abs(np.diff(step)).max() < 4 and abs(step[59] + step[60] + 27) < 1, ("сглаживание угла", step)
     assert len(render.smooth_tilt(np.ones(3), 60)) == 3, "короткое видео"
-    # клик на полном ходу (72° вправо): наклон сходит на нет к нажатию и возвращается — поворот без рывков
+    # клик на полном ходу (72° вправо): наклон не пропадает, поворот клика ложится поверх — без рывков
     age = (np.arange(120) - 60) * 1000 / 60
     lvl = np.round(render.click_curve(age, 320) * (render.CLICK_STEPS - 1)).astype(int)
-    tl = render.frame_tilt(np.full(120, 2.0), np.ones(120, bool), lvl, 60, 72, 27)
+    tl = render.click_tilt(render.frame_tilt(np.full(120, 2.0), np.ones(120, bool), 60, 72, 27), lvl)
     rot = 15 * lvl / (render.CLICK_STEPS - 1) + tl * render.TILT_STEP_DEG
-    assert not tl[lvl > 0].any() and tl[20] < -65 and np.abs(np.diff(rot)).max() < 12, \
-        ("переход от наклона к клику", np.abs(np.diff(rot)).max())
+    assert (tl[lvl > 0] < -65).all() and not (tl[lvl > 0] % render.CLICK_TILT_STEP).any() and tl[20] < -65 \
+        and np.abs(np.diff(rot)).max() < 12, ("наклон во время клика", np.abs(np.diff(rot)).max())
     # стрелка: в покое как в Windows (остриё скошено на 22.5°), на ходу поворачивается на заданный угол в обе стороны
     big = wc.cursor_sprite("arrow", 512)  # мерить углы — на крупном: у 32 px на кончике пара пикселей
 

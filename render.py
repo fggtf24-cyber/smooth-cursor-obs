@@ -31,7 +31,7 @@ CLICK_STEPS = 16  # шагов анимации клика (0 — обычный
 TILT_STEP_DEG = 1.0  # шаг угла наклона в движении: поворот плавный, ступенек не видно, а спрайтов немного
 TILT_SPEED = 0.6  # ширин кадра в секунду по горизонтали: на этой скорости поворот — 3/4 от полного
 TILT_SMOOTH_MS = 70  # сглаживание угла по времени: поворачивается плавно, без рывков от толчков руки
-TILT_RAMP_MS = 200  # к анимации клика наклон сходит на нет и после неё возвращается за это время, без рывка
+CLICK_TILT_STEP = 4  # во время анимации клика наклон — шагами по 4 шага: пар «клик × наклон» вчетверо меньше
 MORPH_STEPS = 16  # шагов анимации смены вида курсора (0 — без смены): отскоку нужны промежуточные размеры
 MORPH_OUT = 0.3  # доля смены вида, за которую прежний курсор сжимается в точку; остальное — рост нового
 
@@ -151,14 +151,13 @@ def hold_types(kind, vis, ms, fps):
     return out
 
 
-def tilt_angle(v, right_deg, left_deg, since_click_ms=np.inf):
+def tilt_angle(v, right_deg, left_deg):
     """Угол наклона в движении, ° (плюс — против часовой), по скорости v (ширин кадра в секунду по горизонтали, плюс —
     вправо). В покое курсор как в системе; на ходу поворачивается от этого положения в сторону движения: вправо — на
     right_deg, влево — на left_deg (у стрелки остриё скошено на 22.5°: при повороте на 22° вправо она смотрит прямо
     вверх). Минус — назад, как от инерции: едет вправо — поворот влево. Поворот растёт со скоростью: медленно — чуть-чуть,
-    быстро — полный. Во время анимации клика (since_click_ms = 0) наклона нет: клик сам поворачивает курсор, а пары
-    «шаг клика × шаг наклона» дали бы сотни спрайтов и рендер в 2–3 раза дольше. После неё наклон плавно возвращается."""
-    f = np.tanh(np.asarray(v) / TILT_SPEED) * np.clip(np.asarray(since_click_ms, float) / TILT_RAMP_MS, 0, 1)
+    быстро — полный. Во время анимации клика наклон тоже есть: поворот клика ложится поверх."""
+    f = np.tanh(np.asarray(v) / TILT_SPEED)
     return -f * np.where(f > 0, right_deg, left_deg)  # f: −1…1 — насколько полно повернуть и в какую сторону
 
 
@@ -170,19 +169,19 @@ def smooth_tilt(deg, fps):
     return np.convolve(deg, k / k.sum())[h:h + len(deg)]
 
 
-def frame_tilt(v, ok, level, fps, right_deg, left_deg, step=TILT_STEP_DEG):
+def frame_tilt(v, ok, fps, right_deg, left_deg, step=TILT_STEP_DEG):
     """Наклон по кадрам, в шагах step (None — в градусах, без округления): tilt_angle по скорости v (там, где не ok,
-    — 0), сглаженный по времени.
-    На кадрах анимации клика (level > 0) — 0: у клика свой поворот, а пары «шаг клика × шаг наклона» дали бы сотни
-    спрайтов. Рендер знает будущее, поэтому наклон плавно сходит на нет к клику и возвращается после него
-    (за TILT_RAMP_MS, по smoothstep) — без рывка даже при клике на полном ходу."""
-    n = np.arange(len(level))
-    click = np.asarray(level) > 0
-    before = n - np.maximum.accumulate(np.where(click, n, -len(n)))  # кадров после прошлого клика
-    after = np.minimum.accumulate(np.where(click, n, 2 * len(n))[::-1])[::-1] - n  # и до следующего
-    u = np.clip(np.minimum(before, after) * 1000 / fps / TILT_RAMP_MS, 0, 1)
-    deg = smooth_tilt(np.where(ok, tilt_angle(v, right_deg, left_deg), 0.0), fps) * u * u * (3 - 2 * u)
+    — 0), сглаженный по времени. И во время анимации клика: раньше там наклона не было, и движение сразу после клика
+    проходило без него."""
+    deg = smooth_tilt(np.where(ok, tilt_angle(v, right_deg, left_deg), 0.0), fps)
     return np.round(deg / step).astype(int) if step else deg
+
+
+def click_tilt(tilt, level):
+    """Шаг наклона с учётом клика: на кадрах его анимации — кратный CLICK_TILT_STEP (как у шлейфа), иначе пары
+    «шаг клика × шаг наклона» дали бы сотни спрайтов. Разница в пару градусов на сжатом курсоре не видна."""
+    tilt = np.asarray(tilt)
+    return np.where(np.asarray(level) > 0, np.round(tilt / CLICK_TILT_STEP).astype(int) * CLICK_TILT_STEP, tilt)
 
 
 def ghost_tilt(k):
@@ -590,9 +589,9 @@ def cursor_track(lg, info, cfg, ghost_ms=()):
     track["type"] = hold_types(track["type"], vis, rc["morph_min_ms"] if rc["morph_hold"] else 0, fps)
     track["morph"], track["prev"] = morph_steps(track["type"], vis, fps, rc["morph_ms"]) if rc["morph_animation"]         else (np.zeros(len(vis), int), track["type"])
     # смена вида курсора наклон не трогает: спрайты перехода наклоняются как обычные
-    track["tilt_deg"] = np.where(vis, frame_tilt(v, ok, track["level"], fps, rc["motion_tilt_right_deg"],
-                                                 rc["motion_tilt_left_deg"], step=None), 0.0)
-    track["tilt"] = np.round(track["tilt_deg"] / TILT_STEP_DEG).astype(int)
+    track["tilt_deg"] = np.where(vis, frame_tilt(v, ok, fps, rc["motion_tilt_right_deg"], rc["motion_tilt_left_deg"],
+                                                 step=None), 0.0)
+    track["tilt"] = click_tilt(np.round(track["tilt_deg"] / TILT_STEP_DEG).astype(int), track["level"])
     zoom = abs(kx * ky * (a * e - b * d)) ** 0.5  # во сколько раз захват увеличен на видео
     size = max(4, round(wc.cursor_base_size() * disp["dpi"] / 96 * rc["cursor_scale"] * zoom))
     return track, to_video, (cl, ct, cr, cb), size
