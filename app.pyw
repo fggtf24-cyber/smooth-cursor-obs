@@ -2206,30 +2206,32 @@ class App:
         l, r = self.columns(p)
         g, _ = self.section(l, "Кодирование")
         self.lbl(g, t("Кодек")).grid(row=0, column=0, sticky="w", pady=4)
-        prores = self.cfg["render"]["codec"].startswith("prores")
-
         def codec_changed(v):  # у ProRes свои настройки: профиль вместо CQ и пресета
-            if v.startswith("prores") != prores:
-                settings.save(self.cfg)
-                self.rebuild()
+            show, hide = (pro, std) if v.startswith("prores") else (std, pro)
+            for w in hide:
+                w.grid_remove()
+            for w in show:
+                w.grid()
 
         self.segmented(g, "render.codec", {"auto": "Авто", "hevc_nvenc": "HEVC", "av1_nvenc": "AV1",
                                            "libx264": "Процессор", "prores_ks": "ProRes"}, codec_changed).grid(
             row=0, column=1, columnspan=2, sticky="w")
         self.enc_lbl = self.lbl(g, "", "small", MUTE)
         self.enc_lbl.grid(row=3, column=0, columnspan=3, sticky="w", pady=(2, 0))
-        if prores:
-            self.lbl(g, t("Профиль")).grid(row=1, column=0, sticky="w", pady=4)
-            self.segmented(g, "render.prores", {"proxy": "Proxy", "lt": "LT", "422": "422", "hq": "HQ",
-                                                "4444": "4444"}).grid(row=1, column=1, columnspan=2, sticky="w")
-            self.lbl(g, t("Файл .mov; качество задаёт профиль."), "small", MUTE).grid(
-                row=2, column=0, columnspan=3, sticky="w")
-        else:
-            self.slider(g, 1, "Качество (CQ)", "render.cq", 10, 35, 1,
-                        "Меньше — лучше и тяжелее файл; 18 — почти без потерь.")
-            self.lbl(g, t("Пресет")).grid(row=2, column=0, sticky="w", pady=4)
-            self.segmented(g, "render.preset", {f"p{i}": str(i) for i in range(1, 8)}).grid(
-                row=2, column=1, columnspan=2, sticky="w")
+        before = set(g.winfo_children())
+        self.slider(g, 1, "Качество (CQ)", "render.cq", 10, 35, 1,
+                    "Меньше — лучше и тяжелее файл; 18 — почти без потерь.")
+        self.lbl(g, t("Пресет")).grid(row=2, column=0, sticky="w", pady=4)
+        self.segmented(g, "render.preset", {f"p{i}": str(i) for i in range(1, 8)}).grid(
+            row=2, column=1, columnspan=2, sticky="w")
+        std = set(g.winfo_children()) - before
+        self.lbl(g, t("Профиль")).grid(row=1, column=0, sticky="w", pady=4)
+        self.segmented(g, "render.prores", {"proxy": "Proxy", "lt": "LT", "422": "422", "hq": "HQ",
+                                            "4444": "4444"}).grid(row=1, column=1, columnspan=2, sticky="w")
+        self.lbl(g, t("Файл .mov; качество задаёт профиль."), "small", MUTE).grid(
+            row=2, column=0, columnspan=3, sticky="w")
+        pro = set(g.winfo_children()) - before - std
+        codec_changed(self.cfg["render"]["codec"])
         g, _ = self.section(l, "Дополнительно")
         self.toggle_row(g, "Отладка: поверх — реальный курсор (красный)", "render.debug_raw").grid(
             row=0, column=0, columnspan=3, sticky="w", pady=3)
