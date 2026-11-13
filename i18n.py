@@ -155,6 +155,15 @@ EN.update({
     "OBS — нет связи": "OBS — not connected", "OBS — подключение…": "OBS — connecting…",
     "OBS {} — подключено": "OBS {} — connected", "Сцена «{}» · экран {}": "Scene “{}” · screen {}",
     "Сцена —": "Scene —", "Холст —": "Canvas —", "{} · профиль «{}»": "{} · profile “{}”",
+    "Исправить": "Fix", "Битрейт записи {:g} Мбит/с — мало, при зуме будет мыло":
+        "Recording bitrate {:g} Mbps is too low: zooming in will look blurry",
+    "Переключить запись OBS на постоянное качество (CQ 18)? Битрейт будет подстраиваться сам, файлы станут крупнее."
+    "\n\nЗакройте окно настроек OBS, если оно открыто, — иначе оно вернёт старые значения.":
+        "Switch OBS recording to constant quality (CQ 18)? Bitrate will adapt on its own, files get bigger."
+        "\n\nClose the OBS settings window if it's open, or it will restore the old values.",
+    "Не удалось поменять качество записи OBS: %s": "Could not change OBS recording quality: %s",
+    "Запись OBS переключена на постоянное качество (CQ 18), профиль «%s» перезагружен":
+        "OBS recording switched to constant quality (CQ 18), profile “%s” reloaded",
     "В сцене OBS нет захвата экрана": "The OBS scene has no display capture",
     "видеокарта NVIDIA (HEVC)": "NVIDIA GPU (HEVC)", "видеокарта AMD (HEVC)": "AMD GPU (HEVC)",
     "графика Intel (HEVC)": "Intel graphics (HEVC)", "процессор (H.264) — медленнее": "CPU (H.264) — slower",

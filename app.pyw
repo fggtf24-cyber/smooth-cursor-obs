@@ -1518,6 +1518,10 @@ class App:
         self.now = [self.lbl(now, "", "body", INK2, anchor="w") for _ in range(3)]
         for w in self.now:
             w.pack(anchor="w", pady=(0, 3))
+        self.q_row = tk.Frame(now, bg=BG)  # мал битрейт записи: показывается, только когда это так
+        self.q_lbl = self.lbl(self.q_row, "", "body", RED, anchor="w")
+        self.q_lbl.pack(side="left")
+        Btn(self.q_row, t("Исправить"), self.fix_quality, small=True).pack(side="left", padx=(10, 0))
 
         self.preview = LivePreview(right, self, 726, 330)
         self.preview.pack(anchor="e")
@@ -2452,6 +2456,28 @@ class App:
         for w, text, bad in zip(self.now, (obs_line, scene_line, canvas_line),
                                 (s.get("obs") == "offline", s.get("missing"), False)):
             w.config(text="•  " + text, fg=RED if bad else INK)
+        if s.get("lowrate"):
+            self.q_lbl.config(text="•  " + t("Битрейт записи {:g} Мбит/с — мало, при зуме будет мыло").format(
+                s["lowrate"] / 1000))
+            self.q_row.pack(anchor="w", pady=(0, 3))
+        else:
+            self.q_row.pack_forget()
+
+    def fix_quality(self):
+        r = self.recorder
+        if not r or r.recording:
+            return messagebox.showwarning(APP, t("Идёт запись — сначала остановите её."))
+        if messagebox.askyesno(APP, t("Переключить запись OBS на постоянное качество (CQ 18)? Битрейт будет "
+                                      "подстраиваться сам, файлы станут крупнее.\n\nЗакройте окно настроек OBS, "
+                                      "если оно открыто, — иначе оно вернёт старые значения.")):
+            self.worker.submit(self._fix_quality, r)
+
+    def _fix_quality(self, r):
+        try:
+            r.obs.fix_rec_quality()
+        except Exception as e:
+            log.error(t("Не удалось поменять качество записи OBS: %s"), e)
+        self._check_display()
 
     def refresh_obs(self):
         if self.recorder:
@@ -2553,7 +2579,8 @@ class App:
             if abs(d["zoom"] - 1) > 0.005:
                 disp += f" ×{d['zoom']:.2f}"
             self.post(self.on_detected, d["device"], d["fps"], profile=d["profile"], scene=d["scene"], display=disp,
-                      canvas=f"{d['canvas'][0]}×{d['canvas'][1]} · {d['fps']:g} fps", missing=False)
+                      canvas=f"{d['canvas'][0]}×{d['canvas'][1]} · {d['fps']:g} fps", missing=False,
+                      lowrate=self.recorder.obs.rec_quality())
         except LookupError as e:
             log.warning("%s", str(e).split("\n")[0])
             self.post(self.on_detected, None, None, missing=True)

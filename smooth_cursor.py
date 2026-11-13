@@ -12,6 +12,7 @@ import io
 import json
 import logging
 import math
+import os
 import re
 import sys
 import threading
@@ -49,6 +50,37 @@ def rerender_paths(args):
     if not log_path:
         raise FileNotFoundError(t("не нашёл лог курсора {}").format(logs[-1]))
     return video, log_path
+
+
+LOW_BPP = 0.08  # бит на пиксель кадра; ниже текст при зуме уходит в блоки. 1080p60 — 10 Мбит/с, 5120×2160@60 — 53
+
+
+def obs_profile_dir(name):
+    """Папка профиля OBS по имени: настройки кодировщика записи лежат там, через WebSocket их не прочитать."""
+    roots = [Path.home() / ".config/obs-studio", Path.home() / ".var/app/com.obsproject.Studio/config/obs-studio"]
+    if sys.platform == "win32":
+        roots.insert(0, Path(os.environ.get("APPDATA", "")) / "obs-studio")
+    for d in (p for r in roots for p in (r / "basic/profiles").glob("*")):  # ponytail: портативный OBS не найдём
+        ini = d / "basic.ini"
+        if ini.is_file() and re.search(rf"^Name={re.escape(name)}\s*$", ini.read_text("utf-8-sig", "replace"), re.M):
+            return d
+    return None
+
+
+def low_bitrate(enc_id, enc, w, h, fps):
+    """Битрейт записи (кбит/с), если для w×h@fps его мало; None — хватает или он не фиксирован (CQP/CRF)."""
+    if enc.get("rate_control", "CBR").upper() not in ("CBR", "VBR", "ABR"):
+        return None
+    # в файле OBS хранит только отличия от умолчаний: x264 — 2500, у аппаратных в OBS 32 — 20000
+    kbps = enc.get("bitrate", 2500 if "x264" in enc_id else 20000)
+    return kbps if kbps * 1000 < LOW_BPP * w * h * fps else None
+
+
+def quality_settings(enc_id, enc):
+    """Те же настройки кодировщика, но с постоянным качеством вместо битрейта."""
+    if "x264" in enc_id:
+        return {**enc, "rate_control": "CRF", "crf": 18}
+    return {**enc, "rate_control": "CQP", "cqp": 18}
 
 
 def _align(ox, oy, align, cx, cy):
@@ -97,6 +129,7 @@ class Obs:
     def __init__(self, c):
         kw = dict(host=c["host"], port=c["port"], password=c["password"], timeout=5)
         self.req = obs.ReqClient(**kw)
+        self.local = c["host"] in ("localhost", "127.0.0.1", "::1")  # файлы профиля OBS доступны, только если он тут
         try:
             self.ev = obs.EventClient(**kw)
         except Exception:
@@ -224,6 +257,59 @@ class Obs:
         for name, value in (("BaseCX", base_w), ("BaseCY", base_h), ("OutputCX", out_w), ("OutputCY", out_h)):
             self.req.set_profile_parameter("Video", name, str(value))
         self.req.send("SetVideoSettings", {"fpsNumerator": fps_num, "fpsDenominator": fps_den})
+
+    def _param(self, cat, name, default=None):
+        r = self.req.get_profile_parameter(cat, name)
+        return r.parameter_value or r.default_parameter_value or default
+
+    def _rec_encoder(self):
+        """(id кодировщика, его настройки, файл настроек или None для простого режима) записи текущего профиля."""
+        if self._param("Output", "Mode", "Simple") == "Simple":
+            enc_id = self._param("SimpleOutput", "StreamEncoder", "x264")
+            if self._param("SimpleOutput", "RecQuality", "Stream") != "Stream":
+                return enc_id, {"rate_control": "CQP"}, None  # «Высокое качество» и выше — без фиксированного битрейта
+            return enc_id, {"rate_control": "CBR", "bitrate": int(self._param("SimpleOutput", "VBitrate", 2500))}, None
+        d = obs_profile_dir(self.req.get_profile_list().current_profile_name) if self.local else None
+        if not d:
+            raise LookupError("profile folder")
+        enc_id = self._param("AdvOut", "RecEncoder", "none")
+        f = d / "recordEncoder.json"
+        if enc_id == "none":  # «Как у трансляции»: настройки в streamEncoder.json
+            enc_id, f = self._param("AdvOut", "Encoder", "obs_x264"), d / "streamEncoder.json"
+        enc = json.loads(f.read_text("utf-8")) if f.is_file() and f.stat().st_size else {}
+        return enc_id, enc, f
+
+    def rec_quality(self):
+        """Битрейт записи (кбит/с), если для её разрешения и fps он мал — при зуме будет мыло; иначе None."""
+        try:
+            enc_id, enc, _ = self._rec_encoder()
+        except Exception as e:
+            log.debug("rec quality: %s", e)
+            return None
+        v = self.req.get_video_settings()
+        return low_bitrate(enc_id, enc, v.output_width, v.output_height, v.fps_numerator / v.fps_denominator)
+
+    def fix_rec_quality(self):
+        """Запись с постоянным качеством (CQ 18) вместо битрейта. Через WebSocket настройки кодировщика не меняются:
+        пишем файл профиля и перезагружаем профиль (переключение на временный и обратно) — иначе OBS его не перечитает.
+        Окно настроек OBS при этом должно быть закрыто: при «OK» оно перезапишет файл старыми значениями."""
+        enc_id, enc, f = self._rec_encoder()
+        if f is None:
+            self.req.set_profile_parameter("SimpleOutput", "RecQuality", "HQ")
+        else:
+            if f.name == "streamEncoder.json":  # трансляцию не трогаем: у записи — свой кодировщик
+                self.req.set_profile_parameter("AdvOut", "RecEncoder", enc_id)
+                f = f.with_name("recordEncoder.json")
+            f.write_text(json.dumps(quality_settings(enc_id, enc)), "utf-8")
+        pl, tmp = self.req.get_profile_list(), "Smooth Cursor · reload"
+        name = pl.current_profile_name
+        if tmp in pl.profiles:  # остался от прерванного раза
+            self.req.set_current_profile(tmp)
+        else:
+            self.req.create_profile(tmp)  # создаёт и переключает
+        self.req.set_current_profile(name)
+        self.req.remove_profile(tmp)
+        log.info(t("Запись OBS переключена на постоянное качество (CQ 18), профиль «%s» перезагружен"), name)
 
     def _ensure_capture(self, scene, source, d, cursor):
         """Сцена и захват экрана d в ней. На Windows method: 0 — авто, 1 — DXGI, 2 — Windows 10."""

@@ -600,6 +600,53 @@ def check_obs_buttons():
     print("кнопки записи в OBS: ок")
 
 
+def check_rec_quality():
+    """Мал ли битрейт записи OBS для разрешения, и «Исправить» пишет CQ в файл записи, не трогая трансляцию."""
+    from types import SimpleNamespace as NS
+    from unittest import mock
+
+    import smooth_cursor as sc
+    calls = []
+    params = {("Output", "Mode"): "Advanced", ("AdvOut", "RecEncoder"): "none",
+              ("AdvOut", "Encoder"): "obs_nvenc_hevc_tex"}
+
+    class Req:
+        def __init__(self, **kw):
+            pass
+
+        def get_profile_parameter(self, cat, name):
+            return NS(parameter_value=params.get((cat, name)), default_parameter_value=None)
+
+        def set_profile_parameter(self, cat, name, value):
+            params[cat, name] = value
+
+        def get_profile_list(self):
+            return NS(current_profile_name="67", profiles=["67"])
+
+        def get_video_settings(self):
+            return NS(output_width=5120, output_height=2160, fps_numerator=60, fps_denominator=1)
+
+        def __getattr__(self, name):  # create_profile / set_current_profile / remove_profile
+            return lambda *a: calls.append(name)
+
+    Ev = lambda **kw: NS(callback=NS(register=lambda fs: None))
+    with tempfile.TemporaryDirectory() as d, mock.patch.object(sc, "obs_profile_dir", lambda n: Path(d)), \
+            mock.patch.object(sc.obs, "ReqClient", Req), mock.patch.object(sc.obs, "EventClient", Ev):
+        o = sc.Obs({"host": "localhost", "port": 0, "password": ""})
+        (Path(d) / "streamEncoder.json").write_text('{"rate_control":"CBR","bitrate":20000}')
+        assert o.rec_quality() == 20000, "20 Мбит/с на 5K60 — мало"
+        assert sc.low_bitrate("obs_x264", {"bitrate": 12000}, 1920, 1080, 60) is None, "1080p60 12 Мбит/с — хватает"
+        o.fix_rec_quality()
+        assert json.loads((Path(d) / "streamEncoder.json").read_text())["bitrate"] == 20000, "трансляцию испортили"
+        assert params["AdvOut", "RecEncoder"] == "obs_nvenc_hevc_tex" and o.rec_quality() is None, "CQ не применился"
+        assert calls == ["create_profile", "set_current_profile", "remove_profile"], ("профиль не перезагружен", calls)
+        params[("Output", "Mode")] = "Simple"
+        assert o.rec_quality() == 2500, "простой режим «как у трансляции» — 2500 по умолчанию"
+        o.fix_rec_quality()
+        assert params["SimpleOutput", "RecQuality"] == "HQ" and o.rec_quality() is None
+    print("качество записи OBS: ок")
+
+
 def check_render_toast():
     """Плашка рендера: примерное время и угол экрана при разных экранах, масштабах и панели задач."""
     assert render.eta_left(0, 0.5, 5) is None and render.eta_left(10, 60, 0.5) is None, "рано судить"
@@ -905,6 +952,7 @@ if __name__ == "__main__":
         check_custom_cursor()
         check_cursor_theme()
     check_obs_buttons()
+    check_rec_quality()
     check_render_toast()
     check_cursor_elsewhere()
     check_presets()
