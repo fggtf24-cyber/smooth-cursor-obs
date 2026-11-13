@@ -2207,7 +2207,14 @@ class App:
         g, _ = self.section(l, "Кодирование")
         self.lbl(g, t("Кодек")).grid(row=0, column=0, sticky="w", pady=4)
         self.segmented(g, "render.codec", {"auto": "Авто", "hevc_nvenc": "HEVC", "av1_nvenc": "AV1",
-                                           "libx264": "Процессор"}).grid(row=0, column=1, columnspan=2, sticky="w")
+                                           "libx264": "Процессор", "prores_ks": "ProRes"}).grid(
+            row=0, column=1, columnspan=2, sticky="w")
+        self.lbl(g, t("ProRes")).grid(row=4, column=0, sticky="w", pady=(10, 4))
+        self.segmented(g, "render.prores", {"proxy": "Proxy", "lt": "LT", "422": "422", "hq": "HQ",
+                                            "4444": "4444"}).grid(row=4, column=1, columnspan=2, sticky="w",
+                                                                  pady=(10, 4))
+        self.lbl(g, t("Для ProRes: файл .mov, качество задаёт профиль, а не CQ и пресет."), "small", MUTE).grid(
+            row=5, column=0, columnspan=3, sticky="w")
         self.enc_lbl = self.lbl(g, "", "small", MUTE)
         self.enc_lbl.grid(row=3, column=0, columnspan=3, sticky="w", pady=(2, 0))
         self.slider(g, 1, "Качество (CQ)", "render.cq", 10, 35, 1,
@@ -2733,7 +2740,7 @@ class App:
         logs = sorted(folder.glob("*.cursor.json"), key=lambda p: p.stat().st_mtime, reverse=True)
         for lp in logs:
             stem = lp.name[:-len(".cursor.json")]
-            smooth = folder / f"{stem}_smooth.mp4"
+            smooth = render.smooth_file(folder / stem)
             self.tree.insert("", "end", iid=str(lp), text=stem, values=(
                 time.strftime("%d.%m.%Y  %H:%M", time.localtime(lp.stat().st_mtime)),
                 t("готово") if smooth.exists() else "—"))
@@ -2762,14 +2769,14 @@ class App:
 
     def open_selected(self, result):
         for video, _ in self.selected()[:1]:
-            out = video.with_name(video.stem + "_smooth.mp4")
+            out = render.smooth_file(video)
             if result and not out.exists():
                 return messagebox.showinfo(APP, t("Эта запись ещё не отрендерена — нажмите «Рендер»."))
             os.startfile(out if result else video)
 
     def show_selected(self):
         for video, _ in self.selected()[:1]:
-            out = video.with_name(video.stem + "_smooth.mp4")
+            out = render.smooth_file(video)
             subprocess.Popen(["explorer", "/select,", str(out if out.exists() else video)])
 
     def ae_selected(self):

@@ -146,7 +146,7 @@ def hold_keys(on):
 def recording_files(video):
     """Файлы, по которым запись узнать в композиции AE: исходник, перепакованный mp4 и готовые с курсором (их —
     подменить исходником). Возвращает (все, готовые)."""
-    baked = [str(video.with_name(video.stem + e)) for e in ("_smooth.mp4", "_smooth_debug.mp4")]
+    baked = [str(video.with_name(video.stem + s + e)) for s in ("_smooth", "_smooth_debug") for e in (".mp4", ".mov")]
     return [str(video), str(video.with_name(video.stem + "_ae") / (video.stem + ".mp4")), *baked], baked
 
 

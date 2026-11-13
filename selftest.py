@@ -148,7 +148,7 @@ def check_render():
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         video = tmp / "src.mp4"
-        codecs = [c for c in ("hevc_nvenc", "av1_nvenc") if render.encoder_works(ff, c)] + ["libx264"]  # в CI видеокарты нет
+        codecs = [c for c in ("hevc_nvenc", "av1_nvenc") if render.encoder_works(ff, c)] + ["libx264", "prores_ks"]  # в CI видеокарты нет
         subprocess.run([ff, "-v", "error", "-f", "lavfi", "-i", "color=c=gray:s=5120x2160:r=30:d=2", "-f", "lavfi",
                         "-i", "sine=d=2", "-c:v", codecs[0], "-c:a", "aac", str(video)], check=True)
         log = synth_log()
@@ -161,6 +161,7 @@ def check_render():
                 render.probe(render.tool(cfg["render"]["ffmpeg"], "ffprobe"), out)
             assert (dst["w"], dst["h"], dst["fps"], dst["frames"]) == (src["w"], src["h"], src["fps"], src["frames"])
             assert abs(dst["duration"] - src["duration"]) < 1 / 30, (src["duration"], dst["duration"])
+            assert out.suffix == render.out_ext(codec) and render.smooth_file(video) == out, out
 
             def crop(path, n):  # 64×64 вокруг точки, где курсор стоит после рывка (1000, 400)
                 raw = subprocess.run([ff, "-v", "error", "-i", str(path), "-vf",
@@ -246,7 +247,7 @@ def check_accurate_blur():
     cfg["render"].update(codec="libx264", click_animation=True, motion_blur=True, shutter=30, debug_raw=False,
                          export_keyframes=False, cursor_scale=1.0, morph_animation=False)  # смена курсора — за кадр
     ff = render.tool(cfg["render"]["ffmpeg"], "ffmpeg")
-    args, render.encoder_args = render.encoder_args, lambda codec, cq, preset: ["-qp", "0", "-pix_fmt", "yuv420p"]
+    args, render.encoder_args = render.encoder_args, lambda codec, cq, preset, prores="hq": ["-qp", "0", "-pix_fmt", "yuv420p"]
     try:  # без потерь (crf 0 — нет): сравниваем пиксели
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
@@ -598,6 +599,48 @@ def check_obs_buttons():
             pass
     assert calls == ["ev closed", "req closed"], ("соединения остались открытыми — OBS не завершится", calls)
     print("кнопки записи в OBS: ок")
+
+
+def check_colors():
+    """Цвет не уезжает ни в одном кодеке: цветная картинка в форматах, какие пишет OBS (8 и 10 бит, tv и pc
+    диапазоны), после рендера совпадает с исходником по пикселям (кадр, где курсора уже нет) и по цветовым меткам."""
+    cfg = settings.load()
+    cfg["sync"]["offset_ms"] = 0
+    cfg["render"].update(debug_raw=False, export_keyframes=False)
+    ff = render.tool(cfg["render"]["ffmpeg"], "ffmpeg")
+    fp = render.tool(cfg["render"]["ffmpeg"], "ffprobe")
+    codecs = [c for c in ("hevc_nvenc", "av1_nvenc") if render.encoder_works(ff, c)] + ["libx264", "prores_ks"]
+
+    def planes(path, to_tv=False):  # кадр 54 (1.8 с, курсор ушёл) — Y, U, V в 16 бит, без пересчёта цветов
+        vf = "select=eq(n\\,54)," + ("scale=in_range=pc:out_range=tv," if to_tv else "") + "format=yuv444p16le"
+        raw = subprocess.run([ff, "-v", "error", "-i", str(path), "-vf", vf,
+                              "-frames:v", "1", "-f", "rawvideo", "-"], capture_output=True, check=True).stdout
+        return np.frombuffer(raw, np.uint16).reshape(3, -1).astype(float) / 65535 * 255  # в шкале 8 бит
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        (tmp / "src.cursor.json").write_text(json.dumps(synth_log()))
+        for pix, rng in (("yuv420p", "tv"), ("yuv420p", "pc"), ("yuv420p10le", "tv")):
+            video = tmp / "src.mp4"
+            subprocess.run([ff, "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=1920x1080:r=30:d=2", "-vf",
+                            f"scale=out_color_matrix=bt709:out_range={rng},format={pix}", "-c:v", "libx264",
+                            "-crf", "0", "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
+                            "-color_range", rng, str(video)], check=True)
+            src = render.probe(fp, video)
+            for codec in codecs:
+                tv = codec.startswith("prores") and rng == "pc"  # ProRes бывает только в ограниченном диапазоне
+                a = planes(video, tv)
+                cfg["render"]["codec"] = codec
+                out = render.render(video, tmp / "src.cursor.json", cfg, progress=lambda pct: False)
+                dst, b = render.probe(fp, out), planes(out)
+                want = {**src, "range": "tv"} if tv else src
+                tags = [(k, want[k], dst[k]) for k in ("space", "range", "trc", "primaries") if want[k] != dst[k]]
+                assert not tags, (pix, rng, codec, "цветовые метки другие", tags)
+                shift = (b - a).mean(axis=1)  # общий сдвиг яркости и оттенка
+                err = np.abs(b - a).mean(axis=1)  # насколько в среднем отличается каждый пиксель
+                assert np.abs(shift).max() < 0.5 and err.max() < 3, (pix, rng, codec, "цвет уехал", shift, err)
+                out.unlink()
+            print(f"цвет {pix} {rng}: ок ({', '.join(codecs)})")
 
 
 def check_rec_quality():
@@ -963,5 +1006,6 @@ if __name__ == "__main__":
     check_ae()
     check_blank_retry()
     check_render()
+    check_colors()
     check_accurate_blur()
     print("selftest OK")

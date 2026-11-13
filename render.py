@@ -301,8 +301,26 @@ def pick_encoder(ffmpeg, codec):
     return next(c for c in ENCODERS if c == "libx264" or encoder_works(ffmpeg, c))
 
 
-def encoder_args(codec, cq, preset):
+# Профили ProRes (prores_ks): номер профиля и формат пикселей. CQ и пресет к ним не относятся — качество задаёт профиль
+PRORES = {"proxy": (0, "yuv422p10le"), "lt": (1, "yuv422p10le"), "422": (2, "yuv422p10le"),
+          "hq": (3, "yuv422p10le"), "4444": (4, "yuv444p10le")}
+
+
+def out_ext(codec):
+    return ".mov" if codec.startswith("prores") else ".mp4"
+
+
+def smooth_file(video):
+    """Готовый результат записи: самый свежий из _smooth.mp4 и _smooth.mov; нет ни одного — путь .mp4."""
+    found = [p for p in (video.with_name(video.stem + "_smooth" + e) for e in (".mp4", ".mov")) if p.exists()]
+    return max(found, key=lambda p: p.stat().st_mtime) if found else video.with_name(video.stem + "_smooth.mp4")
+
+
+def encoder_args(codec, cq, preset, prores="hq"):
     """Качество одним числом (меньше — лучше) и пресет p1…p7 → параметры конкретного кодировщика."""
+    if codec.startswith("prores"):
+        prof, pix = PRORES.get(prores, PRORES["hq"])
+        return ["-profile:v", str(prof), "-vendor", "apl0", "-pix_fmt", pix]
     p = int(str(preset).lstrip("p") or 5)
     if codec.endswith("_nvenc"):
         return ["-preset", f"p{p}", "-tune", "hq", "-rc", "vbr", "-cq", str(cq), "-b:v", "0"]
@@ -677,7 +695,7 @@ def render(video, log_path, cfg, progress=None, clip=None, hwaccel=True):
         except OSError:  # прошлое превью ещё открыто в плеере
             out = out.with_name(f"{video.stem}_preview_{time.strftime('%H%M%S')}.mp4")
     else:
-        out = video.with_name(video.stem + ("_smooth_debug" if rc["debug_raw"] else "_smooth") + ".mp4")
+        out = video.with_name(video.stem + ("_smooth_debug" if rc["debug_raw"] else "_smooth") + out_ext(codec))
         if rc["export_keyframes"]:
             export_csv(video.with_name(video.stem + "_cursor.csv"), track, info["w"], info["h"], fps, types)
 
@@ -714,6 +732,10 @@ def render(video, log_path, cfg, progress=None, clip=None, hwaccel=True):
                 inp = "[bl]"
             chain.append(f"[v{i - 1}]{inp}overlay@{name}=x={HIDE}:y=0:format=yuv{sub}{'p10' if deep else ''}"
                          f":eof_action=repeat{':shortest=1' if name == 'blur' else ''}[v{i}]")  # видео кончилось — всё
+        last, rng = f"[v{len(slots)}]", info["range"]
+        if codec.startswith("prores") and rng == "pc":  # ProRes — только ограниченный диапазон: пересчитываем
+            chain.append(f"{last}scale=in_range=pc:out_range=tv[vtv]")
+            last, rng = "[vtv]", "tv"
         (work / "graph.txt").write_text(";".join(chain), encoding="ascii")
         cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-nostats", "-progress", "pipe:1"]
         if hwaccel:
@@ -723,13 +745,13 @@ def render(video, log_path, cfg, progress=None, clip=None, hwaccel=True):
         cmd += ["-i", str(video)]
         for name, png, *_ in slots:
             cmd += blur_in if name == "blur" else ["-i", png]
-        cmd += [graph_option(ffmpeg), "graph.txt", "-map", f"[v{len(slots)}]", "-map", "0:a?", "-c:a", "copy",
-                "-c:v", codec, *encoder_args(codec, rc["cq"], rc["preset"]), fps_option(ffmpeg), "passthrough",
-                "-colorspace", info["space"], "-color_range", info["range"],
+        cmd += [graph_option(ffmpeg), "graph.txt", "-map", last, "-map", "0:a?", "-c:a", "copy",
+                "-c:v", codec, *encoder_args(codec, rc["cq"], rc["preset"], rc["prores"]), fps_option(ffmpeg), "passthrough",
+                "-colorspace", info["space"], "-color_range", rng,
                 "-color_trc", info["trc"], "-color_primaries", info["primaries"]]
         if codec.startswith("hevc"):
             cmd += ["-tag:v", "hvc1"]
-        part = out.with_name(out.stem + ".part.mp4")  # оборванный рендер не затрёт готовый и не выдаст себя за него
+        part = out.with_name(out.stem + ".part" + out.suffix)  # оборванный рендер не затрёт готовый и не выдаст себя за него
         cmd.append(str(part))
         with open(work / "ffmpeg.log", "w+", encoding="utf-8", errors="replace") as err:
             p = subprocess.Popen(cmd, cwd=work, stdout=subprocess.PIPE, stderr=err, text=True,
