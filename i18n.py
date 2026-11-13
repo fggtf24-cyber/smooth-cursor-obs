@@ -89,6 +89,8 @@ EN = {
     "ffmpeg завершился с кодом {}:\n{}": "ffmpeg exited with code {}:\n{}",
     "Готово: %s — %dx%d @ %.3g fps, %.2f с": "Done: %s — %dx%d @ %.3g fps, %.2f s",
     "Параметры результата не совпадают с исходником (%.2f с)!": "The result does not match the source (%.2f s)!",
+    "Видеокарта отдала пустые кадры — рендерю заново без аппаратного декодирования":
+        "The GPU returned blank frames — rendering again without hardware decoding",
     "Кодировщик: %s": "Encoder: %s",
 }
 

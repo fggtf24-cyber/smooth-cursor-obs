@@ -618,9 +618,22 @@ def eta_text(seconds):
     return t("осталось ≈ {} мин").format(round(seconds / 60))
 
 
-def render(video, log_path, cfg, progress=None, clip=None):
+def blank_frames(ffmpeg, result):
+    """Есть ли в результате обнулённые кадры (Y≈0 — зелёный экран). В ограниченном диапазоне (tv, как пишет OBS) даже
+    чёрный — это Y=16, так что средняя яркость ниже 8 у настоящей картинки не бывает. Читаем только ключевые кадры:
+    один быстрый проход без исходника.
+    ponytail: сбой, начавшийся после последнего ключевого кадра (обычно последние ~10 с), не заметим."""
+    r = subprocess.run([ffmpeg, "-v", "error", "-skip_frame", "nokey", "-i", str(result), "-vf",
+                        "scale=64:36,format=yuv420p", "-fps_mode", "passthrough", "-f", "rawvideo", "-"],
+                       capture_output=True, creationflags=CREATE_NO_WINDOW)
+    frames = np.frombuffer(r.stdout, np.uint8)
+    frames = frames[:len(frames) // 3456 * 3456].reshape(-1, 3456)[:, :2304]  # кадр 64×36 yuv420p; Y — первые 2304 байта
+    return bool(len(frames)) and bool((frames.mean(axis=1) < 8).any())
+
+
+def render(video, log_path, cfg, progress=None, clip=None, hwaccel=True):
     """Рендер видео с плавным курсором. progress(pct) → True отменяет рендер (по умолчанию — лог каждые 10%).
-    clip = (начало_с, длина_с) — короткое превью во временный файл."""
+    clip = (начало_с, длина_с) — короткое превью во временный файл. hwaccel=False — декод исходника процессором."""
     if progress is None:
         nxt = [0]
 
@@ -702,7 +715,9 @@ def render(video, log_path, cfg, progress=None, clip=None):
             chain.append(f"[v{i - 1}]{inp}overlay@{name}=x={HIDE}:y=0:format=yuv{sub}{'p10' if deep else ''}"
                          f":eof_action=repeat{':shortest=1' if name == 'blur' else ''}[v{i}]")  # видео кончилось — всё
         (work / "graph.txt").write_text(";".join(chain), encoding="ascii")
-        cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-nostats", "-progress", "pipe:1", "-hwaccel", "auto"]
+        cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-nostats", "-progress", "pipe:1"]
+        if hwaccel:
+            cmd += ["-hwaccel", "auto"]
         if clip:
             cmd += ["-ss", f"{clip[0]:.3f}", "-t", f"{clip[1]:.3f}"]
         cmd += ["-i", str(video)]
@@ -749,6 +764,12 @@ def render(video, log_path, cfg, progress=None, clip=None):
                 p.wait()
                 part.unlink(missing_ok=True)
                 raise
+    if hwaccel and info["range"] == "tv" and blank_frames(ffmpeg, part):
+        # Сбой драйвера видеокарты (у NVIDIA — nvlddmkm Xid) молча обнуляет кадры аппаратного декодера: ffmpeg
+        # завершается без ошибки, а на выходе зелёный экран с одним курсором. Переделываем с декодом процессором.
+        part.unlink(missing_ok=True)
+        log.warning(t("Видеокарта отдала пустые кадры — рендерю заново без аппаратного декодирования"))
+        return render(video, log_path, cfg, progress, clip, hwaccel=False)
     try:
         os.replace(part, out)
     except OSError:  # старый результат открыт в плеере — новый не выбрасываем

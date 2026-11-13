@@ -184,6 +184,29 @@ def check_render():
         assert (tmp / "src_cursor.csv").read_text(encoding="utf-8").count("\n") == src["frames"] + 1
 
 
+def check_blank_retry():
+    """Пустые кадры от аппаратного декодера (зелёный экран с курсором) ловятся, и рендер переделывается без него."""
+    cfg = settings.load()
+    ff = render.tool(cfg["render"]["ffmpeg"], "ffmpeg")
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        src, black, bad = tmp / "src.mp4", tmp / "black.mp4", tmp / "bad.mp4"
+        for path, vf in ((src, "null"), (black, "lutyuv=y=16:u=128:v=128"),  # настоящий чёрный в tv-диапазоне
+                         (bad, "lutyuv=y=0:u=0:v=0,drawbox=x=300:y=150:w=30:h=40:c=white:t=fill")):  # ноль + курсор
+            subprocess.run([ff, "-v", "error", "-f", "lavfi", "-i", "color=c=gray:s=640x360:r=30:d=2", "-vf", vf,
+                            "-pix_fmt", "yuv420p", "-color_range", "tv", str(path)], check=True)
+        assert not render.blank_frames(ff, src) and not render.blank_frames(ff, black), "обычная картинка — не пустая"
+        assert render.blank_frames(ff, bad), "зелёный (нулевой) кадр с курсором — пустой"
+        (tmp / "src.cursor.json").write_text(json.dumps(synth_log()))
+        calls, real = [], render.blank_frames
+        render.blank_frames = lambda *a, **k: not calls.append(1)  # первый (аппаратный) рендер «испорчен»
+        try:
+            out = render.render(src, tmp / "src.cursor.json", cfg, progress=lambda pct: False)
+        finally:
+            render.blank_frames = real
+        assert len(calls) == 1 and out.exists() and not out.with_name(out.stem + ".part.mp4").exists(), calls
+
+
 def check_cursor_elsewhere():
     """Всю запись курсор на другом мониторе: видео всё равно получается, просто без курсора."""
     cfg = settings.load()
@@ -890,6 +913,7 @@ if __name__ == "__main__":
     check_morph()
     check_obs_transform()
     check_ae()
+    check_blank_retry()
     check_render()
     check_accurate_blur()
     print("selftest OK")
