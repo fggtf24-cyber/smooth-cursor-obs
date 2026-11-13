@@ -2206,22 +2206,30 @@ class App:
         l, r = self.columns(p)
         g, _ = self.section(l, "Кодирование")
         self.lbl(g, t("Кодек")).grid(row=0, column=0, sticky="w", pady=4)
+        prores = self.cfg["render"]["codec"].startswith("prores")
+
+        def codec_changed(v):  # у ProRes свои настройки: профиль вместо CQ и пресета
+            if v.startswith("prores") != prores:
+                settings.save(self.cfg)
+                self.rebuild()
+
         self.segmented(g, "render.codec", {"auto": "Авто", "hevc_nvenc": "HEVC", "av1_nvenc": "AV1",
-                                           "libx264": "Процессор", "prores_ks": "ProRes"}).grid(
+                                           "libx264": "Процессор", "prores_ks": "ProRes"}, codec_changed).grid(
             row=0, column=1, columnspan=2, sticky="w")
-        self.lbl(g, t("ProRes")).grid(row=4, column=0, sticky="w", pady=(10, 4))
-        self.segmented(g, "render.prores", {"proxy": "Proxy", "lt": "LT", "422": "422", "hq": "HQ",
-                                            "4444": "4444"}).grid(row=4, column=1, columnspan=2, sticky="w",
-                                                                  pady=(10, 4))
-        self.lbl(g, t("Для ProRes: файл .mov, качество задаёт профиль, а не CQ и пресет."), "small", MUTE).grid(
-            row=5, column=0, columnspan=3, sticky="w")
         self.enc_lbl = self.lbl(g, "", "small", MUTE)
         self.enc_lbl.grid(row=3, column=0, columnspan=3, sticky="w", pady=(2, 0))
-        self.slider(g, 1, "Качество (CQ)", "render.cq", 10, 35, 1,
-                    "Меньше — лучше и тяжелее файл; 18 — почти без потерь.")
-        self.lbl(g, t("Пресет")).grid(row=2, column=0, sticky="w", pady=4)
-        self.segmented(g, "render.preset", {f"p{i}": str(i) for i in range(1, 8)}).grid(
-            row=2, column=1, columnspan=2, sticky="w")
+        if prores:
+            self.lbl(g, t("Профиль")).grid(row=1, column=0, sticky="w", pady=4)
+            self.segmented(g, "render.prores", {"proxy": "Proxy", "lt": "LT", "422": "422", "hq": "HQ",
+                                                "4444": "4444"}).grid(row=1, column=1, columnspan=2, sticky="w")
+            self.lbl(g, t("Файл .mov; качество задаёт профиль."), "small", MUTE).grid(
+                row=2, column=0, columnspan=3, sticky="w")
+        else:
+            self.slider(g, 1, "Качество (CQ)", "render.cq", 10, 35, 1,
+                        "Меньше — лучше и тяжелее файл; 18 — почти без потерь.")
+            self.lbl(g, t("Пресет")).grid(row=2, column=0, sticky="w", pady=4)
+            self.segmented(g, "render.preset", {f"p{i}": str(i) for i in range(1, 8)}).grid(
+                row=2, column=1, columnspan=2, sticky="w")
         g, _ = self.section(l, "Дополнительно")
         self.toggle_row(g, "Отладка: поверх — реальный курсор (красный)", "render.debug_raw").grid(
             row=0, column=0, columnspan=3, sticky="w", pady=3)

@@ -156,8 +156,7 @@ EN.update({
     "OBS {} — подключено": "OBS {} — connected", "Сцена «{}» · экран {}": "Scene “{}” · screen {}",
     "Сцена —": "Scene —", "Холст —": "Canvas —", "{} · профиль «{}»": "{} · profile “{}”",
     "Исправить": "Fix",
-    "Для ProRes: файл .mov, качество задаёт профиль, а не CQ и пресет.":
-        "ProRes: .mov file; quality comes from the profile, not CQ or preset.", "Битрейт записи {:g} Мбит/с — мало, при зуме будет мыло":
+    "Профиль": "Profile", "Файл .mov; качество задаёт профиль.": ".mov file; quality is set by the profile.", "Битрейт записи {:g} Мбит/с — мало, при зуме будет мыло":
         "Recording bitrate {:g} Mbps is too low: zooming in will look blurry",
     "Переключить запись OBS на постоянное качество (CQ 18)? Битрейт будет подстраиваться сам, файлы станут крупнее."
     "\n\nЗакройте окно настроек OBS, если оно открыто, — иначе оно вернёт старые значения.":
