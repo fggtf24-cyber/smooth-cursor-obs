@@ -155,7 +155,8 @@ EN.update({
     "OBS — нет связи": "OBS — not connected", "OBS — подключение…": "OBS — connecting…",
     "OBS {} — подключено": "OBS {} — connected", "Сцена «{}» · экран {}": "Scene “{}” · screen {}",
     "Сцена —": "Scene —", "Холст —": "Canvas —", "{} · профиль «{}»": "{} · profile “{}”",
-    "Исправить": "Fix",
+    "Исправить": "Fix", "OBS — запускается…": "OBS — starting…",
+    "Запускаю OBS — подключусь, когда он загрузится": "Starting OBS, will connect once it loads",
     "Профиль": "Profile", "Файл .mov; качество задаёт профиль.": ".mov file; quality is set by the profile.", "Битрейт записи {:g} Мбит/с — мало, при зуме будет мыло":
         "Recording bitrate {:g} Mbps is too low: zooming in will look blurry",
     "Переключить запись OBS на постоянное качество (CQ 18)? Битрейт будет подстраиваться сам, файлы станут крупнее."

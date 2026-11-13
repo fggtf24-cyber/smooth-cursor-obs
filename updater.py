@@ -6,7 +6,7 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
-VERSION = "1.7.7"
+VERSION = "1.7.8"
 REPO = "fggtf24-cyber/smooth-cursor-obs"
 ASSET = "SmoothCursor-Setup.exe" if sys.platform == "win32" else "SmoothCursor-linux-x86_64.tar.gz"
 PAGE = f"https://github.com/{REPO}/releases/latest"

@@ -2,6 +2,7 @@
 сеанс и не должен тянуть numpy и окно. Логика как в win32autostart: --watch следит за OBS и запускает программу."""
 import contextlib
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -31,6 +32,19 @@ def running_exe(name):
 
 def obs_running():
     return {pid for pid, _ in processes("obs")}
+
+
+def launch_obs():
+    """Запустить OBS: из пакета дистрибутива или Flatpak. False — не нашёлся."""
+    flat = [Path(p) / "app/com.obsproject.Studio" for p in (Path.home() / ".local/share/flatpak", "/var/lib/flatpak")]
+    if shutil.which("obs"):
+        cmd = ["obs"]
+    elif shutil.which("flatpak") and any(p.exists() for p in flat):
+        cmd = ["flatpak", "run", "com.obsproject.Studio"]
+    else:
+        return False
+    subprocess.Popen(cmd, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return True
 
 
 def command(*args):

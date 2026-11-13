@@ -2452,7 +2452,7 @@ class App:
             self.rec_dot.config(text="■", fg=CARD)
         else:
             self.time_lbl.config(fg=INK)
-        if state == "offline" and self.spec.get("obs") != "offline":
+        if state == "offline" and self.spec.get("obs") not in ("offline", "launching"):  # загружается — не «нет связи»
             self.set_spec(obs="offline")
 
     def set_spec(self, **kw):
@@ -2461,7 +2461,8 @@ class App:
             self.spec = {}
         self.spec = {**self.spec, **kw}
         s = self.spec
-        obs_line = {"offline": t("OBS — нет связи"), "connecting": t("OBS — подключение…")}.get(
+        obs_line = {"offline": t("OBS — нет связи"), "connecting": t("OBS — подключение…"),
+                    "launching": t("OBS — запускается…")}.get(
             s.get("obs"), t("OBS {} — подключено").format(s.get("version", "")))
         if s.get("missing"):
             scene_line = t("В сцене OBS нет захвата экрана")
@@ -2616,6 +2617,10 @@ class App:
         if self.state == "busy":
             return
         if not self.recorder:
+            local = self.cfg["obs"]["host"] in ("localhost", "127.0.0.1", "::1")
+            if local and not autostart.obs_running() and autostart.launch_obs():
+                log.info(t("Запускаю OBS — подключусь, когда он загрузится"))
+                return self.set_spec(obs="launching")  # подключится watch_obs, как только появится процесс
             return self.connect()
         self.set_state("busy")
         self.worker.submit(self._toggle)

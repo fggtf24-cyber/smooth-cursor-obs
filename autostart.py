@@ -5,6 +5,7 @@
 программу с --with-obs. Если её закрыли при открытом OBS, заново не запустит — только при следующем запуске OBS."""
 import ctypes as C
 import ctypes.wintypes as W
+import os
 import subprocess
 import sys
 import winreg
@@ -50,6 +51,27 @@ def running_exe(name):
 def obs_running():
     """pid запущенных OBS: закрытый OBS бывает, что висит процессом ещё долго, рядом с уже открытым новым."""
     return {pid for pid, _ in processes("obs64.exe")}
+
+
+def obs_exe():
+    """obs64.exe: папку установки OBS пишет в реестр его установщик; нет записи — стандартная папка."""
+    dirs = []
+    for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+        try:
+            with winreg.OpenKey(hive, r"SOFTWARE\OBS Studio") as k:
+                dirs.append(Path(winreg.QueryValue(k, None)))
+        except OSError:
+            pass
+    dirs += [Path(os.environ.get(v, "")) / "obs-studio" for v in ("ProgramFiles", "ProgramW6432")]
+    return next((e for e in (d / "bin" / "64bit" / "obs64.exe" for d in dirs) if e.is_file()), None)
+
+
+def launch_obs():
+    """Запустить OBS. False — не нашёлся. Папка запуска — его bin\\64bit: из другой он не находит свои файлы."""
+    exe = obs_exe()
+    if exe:
+        subprocess.Popen([str(exe)], cwd=exe.parent, creationflags=0x08 | 0x200)  # DETACHED | NEW_PROCESS_GROUP
+    return bool(exe)
 
 
 def command(*args):
