@@ -1,5 +1,5 @@
 """Установщик Smooth Cursor: один exe, без прав администратора.
-Ставит программу в %LOCALAPPDATA%\\Programs\\Smooth Cursor, делает ярлыки в «Пуске» и на рабочем столе, запись
+Ставит программу в %LOCALAPPDATA%\\Programs\\Smooth Cursor (или в выбранную папку), делает ярлыки в «Пуске» и на рабочем столе, запись
 в «Установка и удаление программ». С ключом --uninstall удаляет всё обратно (кроме настроек и записей),
 с --update — тихо ставится поверх после закрытия программы (так обновляется сама программа)."""
 import ctypes
@@ -15,7 +15,7 @@ import zipfile
 
 import yaml
 from pathlib import Path
-from tkinter import font as tkfont
+from tkinter import filedialog, font as tkfont
 
 import autostart
 from updater import VERSION
@@ -23,7 +23,6 @@ from updater import VERSION
 APP = "Smooth Cursor"
 EXE = "Smooth Cursor.exe"
 BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
-TARGET = Path(os.environ["LOCALAPPDATA"]) / "Programs" / APP
 
 
 def shell_folder(csidl):
@@ -36,6 +35,18 @@ def shell_folder(csidl):
 START_MENU = shell_folder(0x02)  # CSIDL_PROGRAMS
 DESKTOP = shell_folder(0x10)     # CSIDL_DESKTOPDIRECTORY
 UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\SmoothCursor"
+
+
+def installed_at():
+    """Куда программа уже стоит (из записи «Установка и удаление»); иначе — папка по умолчанию."""
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, UNINSTALL_KEY) as k:
+            return Path(winreg.QueryValueEx(k, "InstallLocation")[0])
+    except OSError:
+        return Path(os.environ["LOCALAPPDATA"]) / "Programs" / APP
+
+
+TARGET = installed_at()
 # палитра программы (app.pyw)
 BG, HOVER, LINE, RULE = "#E6E6E6", "#D6D6D6", "#BDBDBD", "#D0D0D0"
 MUTE, INK2, INK, RED = "#8A8A8A", "#3A3A3A", "#1C1C1C", "#D0342C"
@@ -46,6 +57,7 @@ TXT = {
     "sub": ("плавный курсор для записей OBS", "smooth cursor for OBS recordings"),
     "install": ("Установить", "Install"), "remove": ("Удалить", "Uninstall"), "run": ("Запустить", "Launch"),
     "desktop": ("Ярлык на рабочем столе", "Desktop shortcut"), "where": ("Папка: ", "Folder: "),
+    "change": ("Изменить…", "Change…"),
     "copying": ("Устанавливаю…", "Installing…"), "done": ("Готово. Smooth Cursor установлен.", "Done. Smooth Cursor is installed."),
     "removed": ("Smooth Cursor удалён. Настройки и записи остались на месте.",
                 "Smooth Cursor was removed. Your settings and recordings were kept."),
@@ -118,8 +130,9 @@ def uninstall():
     except OSError:
         pass
     # сам себя удалить нельзя, пока запущен, — папку стирает cmd через пару секунд после выхода
-    subprocess.Popen(f'cmd /c timeout /t 2 /nobreak >nul & rmdir /s /q "{TARGET}"',
-                     creationflags=subprocess.CREATE_NO_WINDOW, shell=True)
+    if (TARGET / EXE).exists():  # чужую папку не стираем, даже если запись в реестре кривая
+        subprocess.Popen(f'cmd /c timeout /t 2 /nobreak >nul & rmdir /s /q "{TARGET}"',
+                         creationflags=subprocess.CREATE_NO_WINDOW, shell=True)
 
 
 def app_running():
@@ -314,10 +327,13 @@ class Window:
         self.counter.config(text="02 / 02" if install else "")
         self.sub.config(text=tr("sub"))
         self.head((tr("head_i") if install else tr("head_u")) + "\nSmooth Cursor.")
-        self.status = self.lbl(self.body, tr("where") + str(TARGET) if install else "", "mono", MUTE,
-                               anchor="w", justify="left", wraplength=600)
-        self.status.pack(anchor="w")
+        line = tk.Frame(self.body, bg=BG)
+        line.pack(anchor="w", fill="x")
+        self.status = self.lbl(line, tr("where") + str(TARGET) if install else "", "mono", MUTE,
+                               anchor="w", justify="left", wraplength=480)
+        self.status.pack(side="left")
         if install:
+            Btn(line, tr("change"), self.pick_folder, self.F["btn"], kind="outline").pack(side="right")
             row = tk.Frame(self.body, bg=BG)
             row.pack(anchor="w", pady=(14, 0))
             self.desktop = Toggle(row, True)
@@ -331,6 +347,16 @@ class Window:
         self.set_bar(0)
         self.btn.set_text(tr("install") if install else tr("remove"))
         self.btn.command = self.go
+
+    def pick_folder(self):
+        global TARGET
+        d = filedialog.askdirectory(parent=self.root, initialdir=str(TARGET.parent), mustexist=False)
+        if not d:
+            return
+        d = Path(d)
+        # своя подпапка: удаление стирает папку целиком, нельзя ставить прямо в D:/ или «Документы»
+        TARGET = d if d.name.lower() == APP.lower() else d / APP
+        self.status.config(text=tr("where") + str(TARGET), fg=MUTE)
 
     def set_bar(self, pct):
         self.bar.delete("all")
@@ -381,6 +407,8 @@ class Window:
 
 if __name__ == "__main__":
     mode = "uninstall" if "--uninstall" in sys.argv else "update" if "--update" in sys.argv else "install"
+    if mode == "uninstall" and getattr(sys, "frozen", False):
+        TARGET = Path(sys.executable).parent  # Uninstall.exe лежит в папке программы
     if mode != "install":
         LANG = read_cfg().get("ui", {}).get("lang", "en")
     Window(mode)
