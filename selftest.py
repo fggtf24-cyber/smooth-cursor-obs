@@ -856,6 +856,10 @@ def check_wayland_format():
     empty = wl.CURSOR_HEAD.pack(7, 0, 1, 2, 0, 0, 28) + wl.BITMAP_HEAD.pack(12, 0, 0, 0, 0)
     assert wl.parse_cursor(lambda off, n: empty[off:off + n])[4] == (None,), "скрытый курсор"
 
+    raw = wl.WaylandSource.__new__(wl.WaylandSource)  # так же собирает объект linux/ci_check.py, без __init__
+    raw.state, raw.buttons = (0, 0, None, False), None
+    assert raw.read()[:4] == (0, 0, None, False), "read() до первого кадра"
+
     src = wl.WaylandSource.__new__(wl.WaylandSource)  # разбор картинок без настоящего потока
     src.state, src.shapes, src.shape, src.buttons = (0, 0, None, False), {}, None, {0x110}
     src._cursor(wl.parse_cursor(lambda off, n: blob[off:off + n]))

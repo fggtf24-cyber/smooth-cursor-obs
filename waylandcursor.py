@@ -295,6 +295,8 @@ class CursorStream:
 
 class WaylandSource:
     """read() — как у X11Source: (x, y, вид, виден ли, левая кнопка, правая кнопка)."""
+    seen = warned = False  # linux/ci_check.py собирает объект через __new__, без __init__
+    started = None
 
     def __init__(self, display):
         import linuxcursor
@@ -339,7 +341,8 @@ class WaylandSource:
         self.state = (x, y, self.shape, self.shape is not None)
 
     def read(self):
-        if not self.seen and not self.warned and time.monotonic() - self.started > 3:
+        if (self.started is not None and not self.seen and not self.warned
+                and time.monotonic() - self.started > 3):
             self.warned = True
             log.warning(t("Система не отдаёт положение курсора — в записи его не будет. На niri нужны niri 26.04+ и "
                           "PipeWire 1.4.8+; ещё проверьте, что для курсора выбран тот же экран, что снимает OBS"))
