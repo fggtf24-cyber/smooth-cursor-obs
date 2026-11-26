@@ -6,8 +6,8 @@ Wayland не показывает программам чужой курсор. 
 
 Клики в метаданных нет: они идут из /dev/input (linuxcursor.InputWatch).
 
-ponytail: режим Metadata есть в порталах GNOME и KDE. У wlroots (Sway, Hyprland) его нет — там честная ошибка.
-Для них нужен свой источник положения, например IPC Hyprland."""
+ponytail: режим Metadata есть в порталах GNOME, KDE и niri 26.04+. У wlroots (Sway, Hyprland) его нет — там
+честная ошибка. Для них нужен свой источник положения, например IPC Hyprland."""
 import ctypes as C
 import hashlib
 import logging
@@ -15,6 +15,7 @@ import os
 import secrets
 import struct
 import threading
+import time
 
 from PIL import Image
 
@@ -23,11 +24,14 @@ from i18n import t
 log = logging.getLogger("smooth")
 
 # ---------- SPA POD: бинарный формат параметров PipeWire. В libspa это inline-функции, поэтому собираем сами ----------
-T_ID, T_INT, T_RECT, T_FRACTION, T_OBJECT, T_CHOICE = 3, 4, 10, 11, 15, 19
+T_ID, T_INT, T_LONG, T_RECT, T_FRACTION, T_OBJECT, T_CHOICE = 3, 4, 5, 10, 11, 15, 19
 CHOICE_RANGE, CHOICE_ENUM, CHOICE_FLAGS = 1, 3, 4
 OBJ_FORMAT, OBJ_BUFFERS, OBJ_META = 0x40003, 0x40004, 0x40005
 PARAM_ENUM_FORMAT, PARAM_FORMAT, PARAM_BUFFERS, PARAM_META = 3, 4, 5, 6
 META_CURSOR = 5
+PROP_MANDATORY, PROP_DONT_FIXATE = 1 << 3, 1 << 4  # spa_pod_prop: свойство обязано быть с обеих сторон / выбор не фиксируется
+VIDEO_FORMAT, VIDEO_MODIFIER = 0x20001, 0x20002  # SPA_FORMAT_VIDEO_format / SPA_FORMAT_VIDEO_modifier
+MOD_LINEAR, MOD_INVALID = 0, (1 << 56) - 1  # DRM_FORMAT_MOD_LINEAR / DRM_FORMAT_MOD_INVALID
 CURSOR_FORMATS = {11: "RGBA", 12: "BGRA", 13: "ARGB", 14: "ABGR"}  # spa_video_format картинки курсора → порядок байт
 CURSOR_HEAD = struct.Struct("<IIiiiiI")  # spa_meta_cursor: id, flags, position, hotspot, bitmap_offset
 BITMAP_HEAD = struct.Struct("<IIIiI")    # spa_meta_bitmap: format, size, stride, offset
@@ -47,23 +51,35 @@ def pod_choice(mode, kind, values):
 
 
 def pod_object(kind, param, props):
-    return pod(T_OBJECT, struct.pack("<II", kind, param) +
-               b"".join(struct.pack("<II", key, 0) + value for key, value in props))
+    """props: (ключ, значение) или (ключ, флаги, значение); значение — уже собранный POD."""
+    body = struct.pack("<II", kind, param)
+    for prop in props:
+        key, flags, value = prop if len(prop) == 3 else (prop[0], 0, prop[1])
+        body += struct.pack("<II", key, flags) + value
+    return pod(T_OBJECT, body)
 
 
 def pair(a, b):
     return struct.pack("<II", a, b)
 
 
-def format_pod():
-    """Какое видео принимаем: несжатое в памяти. Модификаторов нет, поэтому DMA-BUF не предложат."""
-    return pod_object(OBJ_FORMAT, PARAM_ENUM_FORMAT, [
+def format_pod(modifier=False):
+    """Какое видео принимаем: несжатое. С модификатором — для DMA-BUF: niri (26.04+) отдаёт кадры только так, и без
+    модификатора метаданные курсора не согласуются вообще. Без модификатора — для буферов в памяти (GNOME, KDE)."""
+    props = [
         (1, pod_id(2)),  # mediaType: video
         (2, pod_id(1)),  # mediaSubtype: raw
-        (0x20001, pod_choice(CHOICE_ENUM, T_ID, [struct.pack("<I", f) for f in (8, 8, 7, 12, 11)])),
+        (VIDEO_FORMAT, pod_choice(CHOICE_ENUM, T_ID, [struct.pack("<I", f) for f in (8, 8, 7, 12, 11)])),
+    ]
+    if modifier:
+        # LINEAR и «без модификатора»; DONT_FIXATE — пусть niri сам выберет, под какой выделять буфер
+        props.append((VIDEO_MODIFIER, PROP_MANDATORY | PROP_DONT_FIXATE,
+                      pod_choice(CHOICE_ENUM, T_LONG, [struct.pack("<q", m) for m in (MOD_LINEAR, MOD_INVALID)])))
+    props += [
         (0x20003, pod_choice(CHOICE_RANGE, T_RECT, [pair(1920, 1080), pair(1, 1), pair(16384, 16384)])),
         (0x20004, pod_choice(CHOICE_RANGE, T_FRACTION, [pair(240, 1), pair(0, 1), pair(360, 1)])),
-    ])
+    ]
+    return pod_object(OBJ_FORMAT, PARAM_ENUM_FORMAT, props)
 
 
 def cursor_meta_size(side):
@@ -71,11 +87,11 @@ def cursor_meta_size(side):
 
 
 def stream_params():
-    """Ответ на согласованный формат: нужны метаданные курсора и буферы в памяти."""
+    """Ответ на согласованный формат: нужны метаданные курсора и буферы в памяти или DMA-BUF."""
     ints = [struct.pack("<i", cursor_meta_size(s)) for s in (64, 1, 512)]
     return [pod_object(OBJ_META, PARAM_META, [(1, pod_id(META_CURSOR)), (2, pod_choice(CHOICE_RANGE, T_INT, ints))]),
-            pod_object(OBJ_BUFFERS, PARAM_BUFFERS, [  # dataType: MemPtr | MemFd
-                (6, pod_choice(CHOICE_FLAGS, T_INT, [struct.pack("<i", 1 << 1 | 1 << 2)]))])]
+            pod_object(OBJ_BUFFERS, PARAM_BUFFERS, [  # dataType: MemPtr | MemFd | DmaBuf
+                (6, pod_choice(CHOICE_FLAGS, T_INT, [struct.pack("<i", 1 << 1 | 1 << 2 | 1 << 3)]))])]
 
 
 def parse_cursor(read):
@@ -139,8 +155,8 @@ class Portal:
     def _open(self, token_path):
         modes = self.call(self.call_new(self.props, "Get", "ss", (self.IFACE, "AvailableCursorModes"))).body[0][1]
         if not modes & 4:
-            raise RuntimeError(t("Этот рабочий стол не отдаёт положение курсора (нужны GNOME или KDE на Wayland). "
-                                 "Войдите в сеанс X11"))
+            raise RuntimeError(t("Этот рабочий стол не отдаёт положение курсора (нужны GNOME, KDE или niri 26.04+ "
+                                 "на Wayland). Войдите в сеанс X11"))
         res = self.request("CreateSession", "a{sv}", options={"session_handle_token": ("s", "sc" + secrets.token_hex(8))})
         self.session = res["session_handle"][1]
         opts = {"types": ("u", 1), "multiple": ("b", False), "cursor_mode": ("u", 4), "persist_mode": ("u", 2)}
@@ -236,9 +252,10 @@ class CursorStream:
             self.hook = C.create_string_buffer(128)  # struct spa_hook, заполняет PipeWire
             pw.pw_stream_add_listener(self.stream, self.hook, C.byref(self.events), None)
             self.params, self.keep = pod_array(stream_params())
-            formats, keep = pod_array([format_pod()])
+            # Два варианта формата: в памяти (GNOME, KDE) и DMA-BUF с модификатором (niri). Порядок = предпочтение.
+            formats, keep = pod_array([format_pod(), format_pod(modifier=True)])
             # INPUT; AUTOCONNECT | MAP_BUFFERS
-            if pw.pw_stream_connect(self.stream, 0, node, 1 << 0 | 1 << 2, formats, 1) < 0:
+            if pw.pw_stream_connect(self.stream, 0, node, 1 << 0 | 1 << 2, formats, 2) < 0:
                 raise RuntimeError(t("Не удалось подключиться к PipeWire"))
             del keep
         finally:
@@ -289,6 +306,7 @@ class WaylandSource:
             log.warning("%s", e)  # без кликов курсор всё равно плавный: нет только анимации нажатия
         self.state = (0, 0, None, False)  # x, y, вид, виден ли: заменяется целиком, поток PipeWire пишет, логгер читает
         self.shapes, self.shape, self.error = {}, None, None
+        self.seen, self.warned, self.started = False, False, time.monotonic()
         self.portal = Portal(settings.PATH.with_name("wayland_screen_token"))
         w, h = self.portal.size
         if (w, h) != (0, 0) and (w, h) != (display["width"], display["height"]):
@@ -305,6 +323,7 @@ class WaylandSource:
         log.error(t("Поток экрана прервался: %s"), message)
 
     def _cursor(self, parsed):
+        self.seen = True
         x, y, shape, _ = self.state
         if parsed is None:  # курсор ушёл на другой экран
             self.state = (x, y, shape, False)
@@ -320,6 +339,10 @@ class WaylandSource:
         self.state = (x, y, self.shape, self.shape is not None)
 
     def read(self):
+        if not self.seen and not self.warned and time.monotonic() - self.started > 3:
+            self.warned = True
+            log.warning(t("Система не отдаёт положение курсора — в записи его не будет. На niri нужны niri 26.04+ и "
+                          "PipeWire 1.4.8+; ещё проверьте, что для курсора выбран тот же экран, что снимает OBS"))
         x, y, shape, showing = self.state
         down = self.buttons or ()
         return x, y, shape, showing, 0x110 in down, 0x111 in down  # BTN_LEFT, BTN_RIGHT

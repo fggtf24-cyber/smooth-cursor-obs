@@ -34,9 +34,9 @@ F9              → OBS останавливает запись → рядом �
 `./install.sh --remove`). Нужны OBS Studio 30+, ffmpeg и libxfixes3, libxrandr2; на Wayland ещё PipeWire и XWayland.
 Настройки — в `~/.config/SmoothCursor/config.yaml`.
 
-| | X11 | Wayland: GNOME, KDE | Wayland: Sway, Hyprland |
+| | X11 | Wayland: GNOME, KDE, niri 26.04+ | Wayland: Sway, Hyprland |
 |---|---|---|---|
-| Плавный курсор | да | да | нет: система не отдаёт его положение |
+| Плавный курсор | да | да (в niri нужен ещё PipeWire 1.4.8+) | нет: система не отдаёт его положение |
 | Клики и горячая клавиша | да | нужна группа `input` | — |
 | Захват в OBS | «Захват экрана (XSHM)» | «Захват экрана (PipeWire)» | — |
 

@@ -804,21 +804,45 @@ def pod_walk(data):
 def check_wayland_format():
     import waylandcursor as wl
     assert wl.pod_id(2) == bytes.fromhex("04000000 03000000 02000000 00000000")
-    kind, body, rest = pod_walk(wl.format_pod())
-    assert (kind, rest) == (wl.T_OBJECT, b"") and struct.unpack_from("<II", body) == (wl.OBJ_FORMAT, wl.PARAM_ENUM_FORMAT)
-    props, body = {}, body[8:]
-    while body:
-        key, flags = struct.unpack_from("<II", body)
-        props[key], _, body = (lambda k, b, r: ((k, b), None, r))(*pod_walk(body[8:]))
-        assert flags == 0
-    assert list(props) == [1, 2, 0x20001, 0x20003, 0x20004], props
-    assert props[1] == (wl.T_ID, struct.pack("<I", 2))
-    kind, b = props[0x20003]  # размер: выбор из диапазона, значения по 8 байт без заголовков
-    assert kind == wl.T_CHOICE and struct.unpack_from("<IIII", b) == (wl.CHOICE_RANGE, 0, 8, wl.T_RECT) and len(b) == 16 + 24
-    kind, b = props[0x20001]
+
+    def props_of(data):
+        kind, body, rest = pod_walk(data)
+        assert (kind, rest) == (wl.T_OBJECT, b"") and struct.unpack_from("<II", body) == (
+            wl.OBJ_FORMAT, wl.PARAM_ENUM_FORMAT)
+        props, body = {}, body[8:]
+        while body:
+            key, flags = struct.unpack_from("<II", body)
+            kind, value, body = pod_walk(body[8:])
+            props[key] = (kind, flags, value)
+        return props
+
+    props = props_of(wl.format_pod())
+    assert list(props) == [1, 2, wl.VIDEO_FORMAT, 0x20003, 0x20004], props
+    assert props[1] == (wl.T_ID, 0, struct.pack("<I", 2))
+    assert props[2] == (wl.T_ID, 0, struct.pack("<I", 1))
+    kind, flags, b = props[0x20003]  # размер: выбор из диапазона, значения по 8 байт без заголовков
+    assert (kind, flags) == (wl.T_CHOICE, 0)
+    assert struct.unpack_from("<IIII", b) == (wl.CHOICE_RANGE, 0, 8, wl.T_RECT) and len(b) == 16 + 24
+    kind, flags, b = props[wl.VIDEO_FORMAT]
+    assert (kind, flags) == (wl.T_CHOICE, 0)
     assert struct.unpack_from("<IIII", b) == (wl.CHOICE_ENUM, 0, 4, wl.T_ID) and len(b) == 16 + 20
+
+    # niri 26.04 отдаёт кадры только DMA-BUF и требует модификатор: без него поток не согласуется
+    dmabuf = props_of(wl.format_pod(modifier=True))
+    assert list(dmabuf) == [1, 2, wl.VIDEO_FORMAT, wl.VIDEO_MODIFIER, 0x20003, 0x20004], dmabuf
+    kind, flags, b = dmabuf[wl.VIDEO_MODIFIER]
+    assert (kind, flags) == (wl.T_CHOICE, wl.PROP_MANDATORY | wl.PROP_DONT_FIXATE)
+    assert struct.unpack_from("<IIII", b) == (wl.CHOICE_ENUM, 0, 8, wl.T_LONG) and len(b) == 16 + 16
+    assert struct.unpack_from("<qq", b, 16) == (wl.MOD_LINEAR, wl.MOD_INVALID)
+
     for p in wl.stream_params():
         assert pod_walk(p)[0] == wl.T_OBJECT and not pod_walk(p)[2]
+    buffers = wl.stream_params()[1]
+    key, flags = struct.unpack_from("<II", pod_walk(buffers)[1], 8)
+    kind, value, _ = pod_walk(pod_walk(buffers)[1][16:])
+    assert (key, flags, kind) == (6, 0, wl.T_CHOICE)
+    assert struct.unpack_from("<IIII", value) == (wl.CHOICE_FLAGS, 0, 4, wl.T_INT)
+    assert struct.unpack_from("<i", value, 16)[0] == 1 << 1 | 1 << 2 | 1 << 3, "MemPtr | MemFd | DmaBuf"
 
     pixels = bytes([10, 20, 30, 255, 0, 0, 0, 0])  # 2×1, BGRA
     head = wl.CURSOR_HEAD.pack(7, 0, 100, -5, 3, 4, wl.CURSOR_HEAD.size)
