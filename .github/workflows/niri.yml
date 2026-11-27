@@ -1,0 +1,35 @@
+name: niri
+# niri 26.04 отдаёт кадры только через DMA-BUF, а трансляция работает лишь на настоящем DRM (не во вложенном режиме).
+# Поэтому: виртуальная видеокарта vkms на раннере и Arch в контейнере — там свежие niri и PipeWire (linux/ci_niri.sh).
+on:
+  push:
+    paths: [waylandcursor.py, linux/ci_check.py, linux/ci_niri.sh, .github/workflows/niri.yml]
+  pull_request:
+    paths: [waylandcursor.py, linux/ci_check.py, linux/ci_niri.sh, .github/workflows/niri.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  NIRI: v26.04
+jobs:
+  niri:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: niri-build/bin
+          key: niri-${{ env.NIRI }}-software-egl
+      - name: Виртуальная видеокарта vkms и uinput
+        run: |
+          sudo modprobe vkms || { sudo apt-get update && sudo apt-get install -y "linux-modules-extra-$(uname -r)" \
+            && sudo modprobe vkms; }
+          sudo modprobe uinput
+          sudo udevadm settle
+          ls -l /dev/dri /dev/uinput
+      - name: Курсор с niri 26.04 на vkms
+        run: |
+          docker run --rm --privileged --network host -v /dev:/dev -v /run/udev:/run/udev:ro -v "$PWD:/w" -w /w \
+            -e PYTHONIOENCODING=utf-8 -e NIRI archlinux:latest sh linux/ci_niri.sh
+      - if: always()
+        run: cat niri.log || true
