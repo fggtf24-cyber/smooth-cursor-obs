@@ -832,8 +832,9 @@ def check_wayland_format():
     assert list(dmabuf) == [1, 2, wl.VIDEO_FORMAT, wl.VIDEO_MODIFIER, 0x20003, 0x20004], dmabuf
     kind, flags, b = dmabuf[wl.VIDEO_MODIFIER]
     assert (kind, flags) == (wl.T_CHOICE, wl.PROP_MANDATORY | wl.PROP_DONT_FIXATE)
-    assert struct.unpack_from("<IIII", b) == (wl.CHOICE_ENUM, 0, 8, wl.T_LONG) and len(b) == 16 + 16
-    assert struct.unpack_from("<qq", b, 16) == (wl.MOD_LINEAR, wl.MOD_INVALID)
+    assert struct.unpack_from("<IIII", b) == (wl.CHOICE_ENUM, 0, 8, wl.T_LONG) and len(b) == 16 + 24
+    # первое значение Enum — по умолчанию, в выбор не входит: без повтора LINEAR предлагался бы только INVALID
+    assert struct.unpack_from("<qqq", b, 16) == (wl.MOD_LINEAR, wl.MOD_LINEAR, wl.MOD_INVALID)
 
     for p in wl.stream_params():
         assert pod_walk(p)[0] == wl.T_OBJECT and not pod_walk(p)[2]

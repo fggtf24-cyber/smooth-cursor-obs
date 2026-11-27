@@ -17,8 +17,13 @@ EN = {
         "No access to /dev/input. Run: sudo usermod -aG input $USER — then log in again",
     "Портал экрана: {}": "Screen portal: {}",
     "Экран для записи курсора не выбран": "No screen was chosen for cursor recording",
-    "Этот рабочий стол не отдаёт положение курсора (нужны GNOME или KDE на Wayland). Войдите в сеанс X11":
-        "This desktop does not report the cursor position (Wayland needs GNOME or KDE). Log in to an X11 session",
+    "Этот рабочий стол не отдаёт положение курсора (нужны GNOME, KDE или niri 26.04+ на Wayland). Войдите в сеанс X11":
+        "This desktop does not report the cursor position (Wayland needs GNOME, KDE or niri 26.04+). "
+        "Log in to an X11 session",
+    "Система не отдаёт положение курсора — в записи его не будет. На niri нужны niri 26.04+ и PipeWire 1.4.8+; "
+    "ещё проверьте, что для курсора выбран тот же экран, что снимает OBS":
+        "The system does not report the cursor position, so it will be missing from the recording. niri needs "
+        "niri 26.04+ and PipeWire 1.4.8+; also check that the cursor stream uses the same screen OBS captures",
     "Нет библиотеки PipeWire ({}). Поставьте libpipewire-0.3-0": "PipeWire library is missing ({}). Install libpipewire-0.3-0",
     "Не удалось подключиться к PipeWire": "Could not connect to PipeWire",
     "Для курсора выбран экран %dx%d, а OBS снимает %dx%d — выберите тот же экран":

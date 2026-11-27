@@ -72,9 +72,9 @@ def format_pod(modifier=False):
         (VIDEO_FORMAT, pod_choice(CHOICE_ENUM, T_ID, [struct.pack("<I", f) for f in (8, 8, 7, 12, 11)])),
     ]
     if modifier:
-        # LINEAR и «без модификатора»; DONT_FIXATE — пусть niri сам выберет, под какой выделять буфер
+        # первое значение — по умолчанию, в выбор не входит, поэтому LINEAR дважды; DONT_FIXATE — пусть niri сам выберет, под какой выделять буфер
         props.append((VIDEO_MODIFIER, PROP_MANDATORY | PROP_DONT_FIXATE,
-                      pod_choice(CHOICE_ENUM, T_LONG, [struct.pack("<q", m) for m in (MOD_LINEAR, MOD_INVALID)])))
+                      pod_choice(CHOICE_ENUM, T_LONG, [struct.pack("<q", m) for m in (MOD_LINEAR, MOD_LINEAR, MOD_INVALID)])))
     props += [
         (0x20003, pod_choice(CHOICE_RANGE, T_RECT, [pair(1920, 1080), pair(1, 1), pair(16384, 16384)])),
         (0x20004, pod_choice(CHOICE_RANGE, T_FRACTION, [pair(240, 1), pair(0, 1), pair(360, 1)])),
