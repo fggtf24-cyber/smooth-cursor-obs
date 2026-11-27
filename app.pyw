@@ -384,6 +384,13 @@ class RecOverlay(tk.Toplevel):
         self.drag = None
 
     def show(self, seconds, paused, blink):
+        now = time.monotonic()
+        if now - getattr(self, "top_t", 0) > 1:  # раз в секунду: другое окно «поверх всех» (игра, видео на весь
+            self.top_t = now                     # экран, уведомление) могло перекрыть плашку — возвращаем наверх
+            u = wc.user32
+            if not u.IsWindowVisible(self.hwnd):
+                u.ShowWindow(self.hwnd, 4)  # SW_SHOWNOACTIVATE
+            u.SetWindowPos(self.hwnd, W.HWND(-1), 0, 0, 0, 0, 0x1 | 0x2 | 0x10)  # TOPMOST; NOSIZE|NOMOVE|NOACTIVATE
         c = self.c
         c.itemconfig(self.word, text="PAUSE" if paused else "REC", fill=MUTE if paused else self.FG)
         c.itemconfig(self.time, text=f"{seconds // 60:02d}:{seconds % 60:02d}", fill=MUTE if paused else self.FG)
@@ -2449,8 +2456,8 @@ class App:
         self.key_lbl.config(text=self.cfg["hotkey"])
         if self.tray:
             self.tray.update_menu()
+        self.sync_overlay()  # и в «recording»: после неудачного стопа (busy → recording) плашку надо вернуть
         if state != "recording":
-            self.sync_overlay()
             self.time_lbl.config(text="00:00", fg=LINE)
             self.rec_dot.config(text="■", fg=CARD)
         else:
@@ -2649,7 +2656,6 @@ class App:
     def on_started(self):
         self.rec_t0 = time.time()
         self.set_state("recording")
-        self.sync_overlay()
         self.schedule_save()  # проверка курсора могла добавить захват в настройки
 
     def overlay_moved(self, x, y):
